@@ -434,3 +434,50 @@ func (tl *List) queueTracks(next []*connectpb.ContextTrack) {
 		})
 	}
 }
+
+// Drop removes the matching upcoming track from the list, keeping every other
+// track and the order they were in.
+//
+// A track from the context cannot simply be deleted — the context is not ours
+// to rewrite — so the cursor is moved onto it instead, which is what makes the
+// context resume at the track after it. Everything passed over on the way is
+// copied into the queue first, exactly as MoveToFront does.
+func (tl *List) Drop(ctx context.Context, f func(*connectpb.ContextTrack) bool) error {
+	queue := tl.queue
+	if tl.playingQueue {
+		queue = queue[1:]
+	}
+
+	for i, track := range queue {
+		if !f(track) {
+			continue
+		}
+		next := make([]*connectpb.ContextTrack, 0, len(queue)-1)
+		next = append(next, queue[:i]...)
+		next = append(next, queue[i+1:]...)
+		tl.queueTracks(next)
+		return nil
+	}
+
+	var passed []*connectpb.ContextTrack
+	iter := tl.tracks.iterHere()
+	for iter.next(ctx) {
+		curr := iter.get()
+		if !f(curr.item) {
+			passed = append(passed, curr.item)
+			continue
+		}
+
+		next := make([]*connectpb.ContextTrack, 0, len(queue)+len(passed))
+		next = append(next, queue...)
+		next = append(next, passed...)
+		tl.queueTracks(next)
+		tl.tracks.move(iter)
+		return nil
+	}
+
+	if err := iter.error(); err != nil {
+		return fmt.Errorf("failed fetching tracks: %w", err)
+	}
+	return fmt.Errorf("could not find track")
+}

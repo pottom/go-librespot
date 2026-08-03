@@ -76,6 +76,7 @@ const (
 	ApiRequestTypeSetQueue            ApiRequestType = "set_queue"
 	ApiRequestTypeQueue               ApiRequestType = "queue"
 	ApiRequestTypePlayFrom            ApiRequestType = "play_from"
+	ApiRequestTypeDrop                ApiRequestType = "drop"
 	ApiRequestTypeToken               ApiRequestType = "token"
 	ApiRequestSetDeviceName           ApiRequestType = "set_device_name"
 	ApiRequestTypeReopenOutput        ApiRequestType = "reopen_output"
@@ -694,6 +695,20 @@ func (s *ConcreteApiServer) serve() {
 		}
 
 		s.handleRequest(ApiRequest{Type: ApiRequestTypePlayFrom, Data: data}, w)
+	})
+	m.HandleFunc("/player/drop", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		var data ApiRequestDataPlayFrom
+		if err := jsonDecode(r, &data); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		s.handleRequest(ApiRequest{Type: ApiRequestTypeDrop, Data: data}, w)
 	})
 	m.HandleFunc("/player/set_queue", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {

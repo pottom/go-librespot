@@ -514,6 +514,12 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 			return nil, err
 		}
 		return nil, nil
+	case ApiRequestTypeDrop:
+		data := req.Data.(ApiRequestDataPlayFrom)
+		if err := p.dropFromQueue(ctx, data.Uri); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	case ApiRequestTypeResume:
 		_ = p.play(ctx)
 		return nil, nil

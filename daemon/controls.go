@@ -561,6 +561,31 @@ func (p *AppPlayer) playFrom(ctx context.Context, uri string) error {
 	return nil
 }
 
+// dropFromQueue takes an upcoming track out of the list without disturbing
+// anything else. What is playing keeps playing.
+func (p *AppPlayer) dropFromQueue(ctx context.Context, uri string) error {
+	if p.state.tracks == nil {
+		return fmt.Errorf("no context to drop from")
+	}
+
+	spotType := librespot.InferSpotifyIdTypeFromContextUri(p.state.player.ContextUri)
+	target := &connectpb.ContextTrack{Uri: uri}
+	if err := p.state.tracks.Drop(ctx, tracks.ContextTrackComparator(spotType, target)); err != nil {
+		return fmt.Errorf("failed dropping track: %w", err)
+	}
+
+	p.state.player.PrevTracks = p.state.tracks.PrevTracks()
+	p.state.player.NextTracks = p.state.tracks.NextTracks(ctx, nil)
+	p.updateState(ctx)
+
+	// What comes next has changed, so a stream prefetched under the old plan
+	// must not be switched or faded into.
+	p.secondaryStream = nil
+	p.player.SetSecondaryStream(nil)
+	p.schedulePrefetchNext()
+	return nil
+}
+
 // setQueueTracks replaces the queued tracks, leaving the context alone.
 //
 // It cannot go through setQueue: that takes the whole "next tracks" list as a
