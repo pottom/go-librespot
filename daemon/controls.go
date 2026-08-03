@@ -536,6 +536,32 @@ func (p *AppPlayer) setQueue(ctx context.Context, prev []*connectpb.ContextTrack
 	p.schedulePrefetchNext()
 }
 
+// setQueueTracks replaces the queued tracks, leaving the context alone.
+//
+// It cannot go through setQueue: that takes the whole "next tracks" list as a
+// hint — queued items first, then the context — which is what the official
+// client sends. Handing it only the queued items makes NextTracks skip
+// everything past them, wiping whatever the album or playlist had coming.
+// Passing no hint at all lets the context be walked from where it actually is,
+// which is what addToQueue does.
+func (p *AppPlayer) setQueueTracks(ctx context.Context, queued []*connectpb.ContextTrack) {
+	if p.state.tracks == nil {
+		p.app.log.Warnf("cannot set queue without a context")
+		return
+	}
+
+	p.state.tracks.SetQueue(nil, queued)
+	p.state.player.PrevTracks = p.state.tracks.PrevTracks()
+	p.state.player.NextTracks = p.state.tracks.NextTracks(ctx, nil)
+	p.updateState(ctx)
+
+	// The upcoming track may have changed: a stream prefetched under the old
+	// plan must not be switched or faded into.
+	p.secondaryStream = nil
+	p.player.SetSecondaryStream(nil)
+	p.schedulePrefetchNext()
+}
+
 func (p *AppPlayer) play(ctx context.Context) error {
 	if p.primaryStream == nil {
 		return fmt.Errorf("no primary stream")

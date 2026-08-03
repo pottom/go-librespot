@@ -619,6 +619,20 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 	case ApiRequestTypeAddToQueue:
 		p.addToQueue(ctx, &connectpb.ContextTrack{Uri: req.Data.(string)})
 		return nil, nil
+	case ApiRequestTypeSetQueue:
+		uris := req.Data.([]string)
+		queued := make([]*connectpb.ContextTrack, 0, len(uris))
+		for i, uri := range uris {
+			queued = append(queued, &connectpb.ContextTrack{
+				Uri: uri,
+				Uid: fmt.Sprintf("q%d", i),
+				// SetQueue keeps only the leading run of tracks marked as
+				// queued, so every entry has to carry the flag.
+				Metadata: map[string]string{"is_queued": "true"},
+			})
+		}
+		p.setQueueTracks(ctx, queued)
+		return nil, nil
 	case ApiRequestTypeToken:
 		accessToken, err := p.sess.Spclient().GetAccessToken(ctx, true)
 		if err != nil {
