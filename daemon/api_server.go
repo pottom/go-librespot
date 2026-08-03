@@ -74,6 +74,7 @@ const (
 	ApiRequestTypeSetShufflingContext ApiRequestType = "shuffling_context"
 	ApiRequestTypeAddToQueue          ApiRequestType = "add_to_queue"
 	ApiRequestTypeSetQueue            ApiRequestType = "set_queue"
+	ApiRequestTypeQueue               ApiRequestType = "queue"
 	ApiRequestTypeToken               ApiRequestType = "token"
 	ApiRequestSetDeviceName           ApiRequestType = "set_device_name"
 	ApiRequestTypeReopenOutput        ApiRequestType = "reopen_output"
@@ -281,6 +282,20 @@ type ApiResponseStatus struct {
 	// per track, and a track may not offer the preferred one.
 	Bitrate int    `json:"bitrate"`
 	Format  string `json:"format"`
+}
+
+// ApiResponseQueue lists what is coming, in order.
+type ApiResponseQueue struct {
+	Tracks []ApiResponseQueueTrack `json:"tracks"`
+}
+
+// ApiResponseQueueTrack is one upcoming track. Queued says whether it was put
+// there by hand, which is the only part of the queue that can be edited: the
+// rest comes from the context and moves only as the context is walked.
+type ApiResponseQueueTrack struct {
+	Uri    string `json:"uri"`
+	Uid    string `json:"uid"`
+	Queued bool   `json:"queued"`
 }
 
 type ApiResponseRoot struct {
@@ -651,6 +666,14 @@ func (s *ConcreteApiServer) serve() {
 		}
 
 		s.handleRequest(ApiRequest{Type: ApiRequestTypeAddToQueue, Data: data.Uri}, w)
+	})
+	m.HandleFunc("/player/queue", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		s.handleRequest(ApiRequest{Type: ApiRequestTypeQueue}, w)
 	})
 	m.HandleFunc("/player/set_queue", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {

@@ -497,6 +497,17 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 		}
 
 		return resp, nil
+	case ApiRequestTypeQueue:
+		next := p.state.player.NextTracks
+		resp := &ApiResponseQueue{Tracks: make([]ApiResponseQueueTrack, 0, len(next))}
+		for _, track := range next {
+			resp.Tracks = append(resp.Tracks, ApiResponseQueueTrack{
+				Uri:    track.Uri,
+				Uid:    track.Uid,
+				Queued: track.Metadata["is_queued"] == "true",
+			})
+		}
+		return resp, nil
 	case ApiRequestTypeResume:
 		_ = p.play(ctx)
 		return nil, nil
