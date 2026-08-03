@@ -764,6 +764,14 @@ func (p *AppPlayer) Run(ctx context.Context, apiRecv <-chan ApiRequest, mprisRec
 		select {
 		case <-p.stop:
 			return
+		case <-ctx.Done():
+			// Without this the loop outlives its own context. App.Close would
+			// already have taken the API server down with it, leaving a process
+			// that still holds the lock and the session but answers nothing —
+			// indistinguishable from a healthy daemon, and unkillable by
+			// anything gentler than SIGKILL.
+			p.Close()
+			return
 		case pkt, ok := <-apRecv:
 			if !ok {
 				continue
