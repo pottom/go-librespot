@@ -485,7 +485,6 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 			Paused:         p.state.player.IsPaused,
 			Buffering:      p.state.player.IsBuffering,
 			PlayOrigin:     p.state.player.PlayOrigin.FeatureIdentifier,
-			ContextUri:     p.state.player.ContextUri,
 		}
 
 		if p.primaryStream != nil && p.prodInfo != nil {
