@@ -357,3 +357,80 @@ func (tl *List) ToggleShuffle(ctx context.Context, shuffle bool) error {
 		}
 	}
 }
+
+// MoveToFront brings the matching upcoming track to the head of the list,
+// keeping every other track and the order they were in.
+//
+// The queue is the only part of the list whose order can be set, so anything
+// passed over on the way to the target is copied into it before the context
+// cursor moves past. Nothing is dropped, and nothing is heard twice: the
+// context resumes at the track after the target, whose copy is already queued.
+func (tl *List) MoveToFront(ctx context.Context, f func(*connectpb.ContextTrack) bool) error {
+	queue := tl.queue
+	if tl.playingQueue {
+		// The head is the track sounding now, which SetQueue keeps for itself.
+		queue = queue[1:]
+	}
+
+	for i, track := range queue {
+		if !f(track) {
+			continue
+		}
+		next := make([]*connectpb.ContextTrack, 0, len(queue))
+		next = append(next, track)
+		next = append(next, queue[:i]...)
+		next = append(next, queue[i+1:]...)
+		tl.queueTracks(next)
+		return nil
+	}
+
+	var passed []*connectpb.ContextTrack
+	iter := tl.tracks.iterHere()
+	for iter.next(ctx) {
+		curr := iter.get()
+		if !f(curr.item) {
+			passed = append(passed, curr.item)
+			continue
+		}
+
+		next := make([]*connectpb.ContextTrack, 0, len(queue)+len(passed)+1)
+		next = append(next, curr.item)
+		next = append(next, queue...)
+		next = append(next, passed...)
+		tl.queueTracks(next)
+
+		// The cursor lands on the target rather than past it: the track after
+		// it is the one the context should offer once the queue runs dry.
+		tl.tracks.move(iter)
+		return nil
+	}
+
+	if err := iter.error(); err != nil {
+		return fmt.Errorf("failed fetching tracks: %w", err)
+	}
+	return fmt.Errorf("could not find track")
+}
+
+// queueTracks replaces the queue, marking every entry so that SetQueue's rule —
+// the queue is the leading run of queued tracks — holds for all of them. The
+// tracks are copied because the context still owns the originals.
+func (tl *List) queueTracks(next []*connectpb.ContextTrack) {
+	if tl.playingQueue {
+		tl.queue = tl.queue[:1]
+	} else {
+		tl.queue = nil
+	}
+
+	for i, track := range next {
+		uid := track.Uid
+		if uid == "" {
+			uid = fmt.Sprintf("q%d", i)
+		}
+		tl.queue = append(tl.queue, &connectpb.ContextTrack{
+			Uri:      track.Uri,
+			Uid:      uid,
+			Gid:      track.Gid,
+			Metadata: map[string]string{"is_queued": "true"},
+		})
+	}
+}

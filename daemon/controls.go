@@ -536,6 +536,31 @@ func (p *AppPlayer) setQueue(ctx context.Context, prev []*connectpb.ContextTrack
 	p.schedulePrefetchNext()
 }
 
+// playFrom brings an upcoming track to the front and starts it, leaving every
+// other track in the list and in its order.
+//
+// Seeking there would have been the other reading, and is what skipNext does,
+// but it throws away everything between here and the target. The tracks in the
+// list are there to be played.
+func (p *AppPlayer) playFrom(ctx context.Context, uri string) error {
+	if p.state.tracks == nil {
+		return fmt.Errorf("no context to play from")
+	}
+
+	spotType := librespot.InferSpotifyIdTypeFromContextUri(p.state.player.ContextUri)
+	target := &connectpb.ContextTrack{Uri: uri}
+	if err := p.state.tracks.MoveToFront(ctx, tracks.ContextTrackComparator(spotType, target)); err != nil {
+		return fmt.Errorf("failed moving track to front: %w", err)
+	}
+
+	// The track is now the head of the queue, so an ordinary advance starts it.
+	// advanceNext loads it and republishes the state on its own.
+	if _, err := p.advanceNext(ctx, true, true); err != nil {
+		return fmt.Errorf("failed starting track: %w", err)
+	}
+	return nil
+}
+
 // setQueueTracks replaces the queued tracks, leaving the context alone.
 //
 // It cannot go through setQueue: that takes the whole "next tracks" list as a

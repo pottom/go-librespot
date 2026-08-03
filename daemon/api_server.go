@@ -75,6 +75,7 @@ const (
 	ApiRequestTypeAddToQueue          ApiRequestType = "add_to_queue"
 	ApiRequestTypeSetQueue            ApiRequestType = "set_queue"
 	ApiRequestTypeQueue               ApiRequestType = "queue"
+	ApiRequestTypePlayFrom            ApiRequestType = "play_from"
 	ApiRequestTypeToken               ApiRequestType = "token"
 	ApiRequestSetDeviceName           ApiRequestType = "set_device_name"
 	ApiRequestTypeReopenOutput        ApiRequestType = "reopen_output"
@@ -149,6 +150,11 @@ type ApiRequestDataPlay struct {
 	// Position is the position in milliseconds to start playback at within the
 	// selected track. Zero starts from the beginning.
 	Position int64 `json:"position"`
+}
+
+// ApiRequestDataPlayFrom names a track already coming up.
+type ApiRequestDataPlayFrom struct {
+	Uri string `json:"uri"`
 }
 
 type ApiRequestDataNext struct {
@@ -674,6 +680,20 @@ func (s *ConcreteApiServer) serve() {
 		}
 
 		s.handleRequest(ApiRequest{Type: ApiRequestTypeQueue}, w)
+	})
+	m.HandleFunc("/player/play_from", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		var data ApiRequestDataPlayFrom
+		if err := jsonDecode(r, &data); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		s.handleRequest(ApiRequest{Type: ApiRequestTypePlayFrom, Data: data}, w)
 	})
 	m.HandleFunc("/player/set_queue", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
