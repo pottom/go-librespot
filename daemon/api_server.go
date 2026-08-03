@@ -275,6 +275,12 @@ type ApiResponseStatus struct {
 	RepeatTrack    bool                    `json:"repeat_track"`
 	ShuffleContext bool                    `json:"shuffle_context"`
 	Track          *ApiResponseStatusTrack `json:"track"`
+
+	// Bitrate and Format describe the stream actually being played, which is
+	// not necessarily the one configured: the best available format is picked
+	// per track, and a track may not offer the preferred one.
+	Bitrate int    `json:"bitrate"`
+	Format  string `json:"format"`
 }
 
 type ApiResponseRoot struct {
