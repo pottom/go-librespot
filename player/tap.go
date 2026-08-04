@@ -6,10 +6,17 @@ import (
 	librespot "github.com/devgianlu/go-librespot"
 )
 
-// TapSamples is how many samples a tapped frame carries. It is a whole number
-// of terminal columns' worth for any sane width, and small enough that a
-// controller can be sent one thirty times a second without noticing.
-const TapSamples = 256
+// TapSamples is how many samples a tapped frame carries.
+//
+// It is twice what a display needs, and the surplus is the point: a controller
+// drawing a waveform has to start each frame at the same place in the wave, or
+// the picture shimmers. The extra samples are the slack it searches for that
+// point in.
+const TapSamples = 512
+
+// TapWindow is how much of a frame is meant to be drawn. The rest is trigger
+// slack.
+const TapWindow = 256
 
 // tap copies the samples on their way to the audio device, so that something
 // outside the player can see what is being heard.
@@ -33,10 +40,10 @@ type tap struct {
 // newTap wraps a reader. rate is the source sample rate and fps how often a
 // frame should be complete; together they set how much is thrown away.
 func newTap(inner librespot.Float32Reader, rate, channels, fps int) *tap {
-	// A frame should span roughly one display frame's worth of audio, so the
-	// trace moves at the speed of the music rather than racing ahead of it.
+	// A drawn window should span roughly one display frame's worth of audio, so
+	// the trace moves at the speed of the music rather than racing ahead of it.
 	span := rate / fps
-	every := max(span/TapSamples, 1)
+	every := max(span/TapWindow, 1)
 
 	return &tap{
 		inner: inner,
