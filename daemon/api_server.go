@@ -74,6 +74,7 @@ const (
 	ApiRequestTypeSetShufflingContext ApiRequestType = "shuffling_context"
 	ApiRequestTypeAddToQueue          ApiRequestType = "add_to_queue"
 	ApiRequestTypeSetQueue            ApiRequestType = "set_queue"
+	ApiRequestTypeReorder             ApiRequestType = "reorder"
 	ApiRequestTypeQueue               ApiRequestType = "queue"
 	ApiRequestTypePlayFrom            ApiRequestType = "play_from"
 	ApiRequestTypeDrop                ApiRequestType = "drop"
@@ -805,6 +806,22 @@ func (s *ConcreteApiServer) serve() {
 		}
 
 		s.handleRequest(ApiRequest{Type: ApiRequestTypeSetQueue, Data: data.Uris}, w)
+	})
+	m.HandleFunc("/player/reorder", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		var data struct {
+			Uris []string `json:"uris"`
+		}
+		if err := jsonDecode(r, &data); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		s.handleRequest(ApiRequest{Type: ApiRequestTypeReorder, Data: data.Uris}, w)
 	})
 	m.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {

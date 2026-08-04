@@ -411,6 +411,86 @@ func (tl *List) MoveToFront(ctx context.Context, f func(*connectpb.ContextTrack)
 	return fmt.Errorf("could not find track")
 }
 
+// Reorder puts the tracks the matchers name at the head of what is coming, in
+// the order the matchers are given, and leaves everything else where it was.
+//
+// It is MoveToFront generalised from one track to a run of them, and it works
+// the same way: the queue is the only part of the list whose order can be set,
+// so a track taken from the context is copied into the queue and the cursor
+// moved past it. The caller therefore has to name every track from the front of
+// the list down to the deepest one it wants moved — anything left unnamed in
+// between would be pushed behind the run rather than staying where it was.
+//
+// Nothing is dropped and nothing is heard twice: the context resumes at the
+// track after the deepest one taken, and every track before it is in the queue.
+func (tl *List) Reorder(ctx context.Context, want []func(*connectpb.ContextTrack) bool) error {
+	if len(want) == 0 {
+		return nil
+	}
+
+	queue := tl.queue
+	if tl.playingQueue {
+		// The head is the track sounding now, which SetQueue keeps for itself.
+		queue = queue[1:]
+	}
+
+	found := make([]*connectpb.ContextTrack, len(want))
+	left := len(want)
+	take := func(track *connectpb.ContextTrack) bool {
+		for i, f := range want {
+			if found[i] == nil && f(track) {
+				found[i], left = track, left-1
+				return true
+			}
+		}
+		return false
+	}
+
+	// The queue first: those tracks are already out of the context's order, so
+	// taking one costs nothing.
+	var spare []*connectpb.ContextTrack
+	for _, track := range queue {
+		if !take(track) {
+			spare = append(spare, track)
+		}
+	}
+
+	if left == 0 {
+		tl.queueTracks(append(found, spare...))
+		return nil
+	}
+
+	var passed []*connectpb.ContextTrack
+	iter := tl.tracks.iterHere()
+	for iter.next(ctx) {
+		curr := iter.get()
+		if !take(curr.item) {
+			passed = append(passed, curr.item)
+			continue
+		}
+		if left > 0 {
+			continue
+		}
+
+		next := make([]*connectpb.ContextTrack, 0, len(found)+len(spare)+len(passed))
+		next = append(next, found...)
+		next = append(next, spare...)
+		next = append(next, passed...)
+		tl.queueTracks(next)
+
+		// The cursor lands on the deepest track taken rather than past it: the
+		// track after it is the one the context should offer once the queue
+		// runs dry.
+		tl.tracks.move(iter)
+		return nil
+	}
+
+	if err := iter.error(); err != nil {
+		return fmt.Errorf("failed fetching tracks: %w", err)
+	}
+	return fmt.Errorf("could not find track")
+}
+
 // queueTracks replaces the queue, marking every entry so that SetQueue's rule —
 // the queue is the leading run of queued tracks — holds for all of them. The
 // tracks are copied because the context still owns the originals.

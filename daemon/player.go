@@ -693,6 +693,11 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 		}
 		p.setQueueTracks(ctx, queued)
 		return nil, nil
+	case ApiRequestTypeReorder:
+		if err := p.reorderTracks(ctx, req.Data.([]string)); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	case ApiRequestTypeToken:
 		accessToken, err := p.sess.Spclient().GetAccessToken(ctx, true)
 		if err != nil {

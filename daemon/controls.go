@@ -595,6 +595,38 @@ func (p *AppPlayer) dropFromQueue(ctx context.Context, uri string) error {
 	return nil
 }
 
+// reorderTracks puts the named tracks at the head of what is coming, in the
+// order they are given. What is playing keeps playing.
+//
+// The caller names every track from the front of the list down to the deepest
+// one it is moving, which is what lets a track be moved by one place rather
+// than only to the front: see List.Reorder.
+func (p *AppPlayer) reorderTracks(ctx context.Context, uris []string) error {
+	if p.state.tracks == nil {
+		return fmt.Errorf("no context to reorder")
+	}
+
+	spotType := librespot.InferSpotifyIdTypeFromContextUri(p.state.player.ContextUri)
+	want := make([]func(*connectpb.ContextTrack) bool, 0, len(uris))
+	for _, uri := range uris {
+		want = append(want, tracks.ContextTrackComparator(spotType, &connectpb.ContextTrack{Uri: uri}))
+	}
+	if err := p.state.tracks.Reorder(ctx, want); err != nil {
+		return fmt.Errorf("failed reordering tracks: %w", err)
+	}
+
+	p.state.player.PrevTracks = p.state.tracks.PrevTracks()
+	p.state.player.NextTracks = p.state.tracks.NextTracks(ctx, nil)
+	p.updateState(ctx)
+
+	// What comes next has changed, so a stream prefetched under the old plan
+	// must not be switched or faded into.
+	p.secondaryStream = nil
+	p.player.SetSecondaryStream(nil)
+	p.schedulePrefetchNext()
+	return nil
+}
+
 // setQueueTracks replaces the queued tracks, leaving the context alone.
 //
 // It cannot go through setQueue: that takes the whole "next tracks" list as a
