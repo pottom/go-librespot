@@ -495,6 +495,17 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 				resp.Bitrate = player.GetFormatBitrate(*file.Format)
 				resp.Format = file.Format.String()
 			}
+		} else if current := p.state.player.Track; current != nil && current.Uri != "" {
+			// The names come off the stream, and there is not always one: a
+			// session restored from elsewhere is playing before it has loaded
+			// anything of its own. The state still knows what is on, and a
+			// controller can name it from the queue — an empty answer over
+			// music that is plainly playing is the worst of the three.
+			resp.Track = &ApiResponseStatusTrack{
+				Uri:      current.Uri,
+				Position: p.state.trackPosition(),
+			}
+			resp.Tempo = p.app.tempos.Get(current.Uri)
 		}
 
 		return resp, nil
