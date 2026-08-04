@@ -338,6 +338,10 @@ func (p *AppPlayer) loadCurrentTrackOrSkip(ctx context.Context, paused, drop boo
 }
 
 func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) error {
+	// A new track has a new beat. Without this the last one lingers for as long
+	// as the analysis window is deep, which is long enough to be seen.
+	p.player.ResetTempo()
+
 	if p.primaryStream != nil {
 		unloadPosition := p.player.PositionMs()
 		p.sess.Events().OnPrimaryStreamUnload(p.primaryStream, unloadPosition)

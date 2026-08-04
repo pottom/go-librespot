@@ -30,6 +30,11 @@ const TapWindow = 256
 type tap struct {
 	inner librespot.Float32Reader
 
+	// tempo listens to the same samples. It wants every one of them, not the
+	// decimated few the waveform keeps, so it is fed separately.
+	tempo    *Tempo
+	channels int
+
 	mu    sync.Mutex
 	frame []float32 // the most recent frame, mono
 	fill  int       // how far into frame the next sample goes
@@ -46,9 +51,11 @@ func newTap(inner librespot.Float32Reader, rate, channels, fps int) *tap {
 	every := max(span/TapWindow, 1)
 
 	return &tap{
-		inner: inner,
-		frame: make([]float32, TapSamples),
-		every: every * channels,
+		inner:    inner,
+		tempo:    newTempo(),
+		channels: channels,
+		frame:    make([]float32, TapSamples),
+		every:    every * channels,
 	}
 }
 
@@ -56,6 +63,7 @@ func (t *tap) Read(p []float32) (int, error) {
 	n, err := t.inner.Read(p)
 	if n > 0 {
 		t.absorb(p[:n])
+		t.tempo.feed(p[:n], t.channels)
 	}
 	return n, err
 }
@@ -105,4 +113,24 @@ func (p *Player) Waveform() []float32 {
 		return nil
 	}
 	return t.Frame()
+}
+
+// Tempo is the measured beat rate of what is playing, or zero while the
+// analyser is still listening or the recording has no steady beat.
+func (p *Player) Tempo() float64 {
+	t := p.tap.Load()
+	if t == nil {
+		return 0
+	}
+	bpm, _ := t.tempo.Result()
+	return bpm
+}
+
+// ResetTempo forgets what has been heard, for when the track changes. Without
+// it the previous track's beat lingers for as long as the analysis window is
+// deep.
+func (p *Player) ResetTempo() {
+	if t := p.tap.Load(); t != nil {
+		t.tempo.Reset()
+	}
 }

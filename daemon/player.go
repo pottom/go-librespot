@@ -489,6 +489,7 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 
 		if p.primaryStream != nil && p.prodInfo != nil {
 			resp.Track = p.newApiResponseStatusTrack(p.primaryStream.Media, p.state.trackPosition())
+			resp.Tempo = p.player.Tempo()
 
 			if file := p.primaryStream.File; file != nil && file.Format != nil {
 				resp.Bitrate = player.GetFormatBitrate(*file.Format)

@@ -293,6 +293,12 @@ type ApiResponseStatus struct {
 	// per track, and a track may not offer the preferred one.
 	Bitrate int    `json:"bitrate"`
 	Format  string `json:"format"`
+
+	// Tempo is the measured beat rate, or zero while the analyser is still
+	// listening or the recording has no steady beat. It is measured here rather
+	// than looked up: the endpoint that would report it is closed to
+	// applications registered since late 2024, and the audio is right here.
+	Tempo float64 `json:"tempo"`
 }
 
 // ApiResponseQueue lists what is playing and what is coming, in order. The
