@@ -305,6 +305,12 @@ type ApiResponseStatus struct {
 	ShuffleContext bool                    `json:"shuffle_context"`
 	Track          *ApiResponseStatusTrack `json:"track"`
 
+	// Unplayable is the last track Spotify would not hand over an audio key
+	// for, and that the player therefore moved past. It is reported so a
+	// controller can say what happened: a list that skips a track on its own
+	// reads as a fault in the controller.
+	Unplayable string `json:"unplayable"`
+
 	// Bitrate and Format describe the stream actually being played, which is
 	// not necessarily the one configured: the best available format is picked
 	// per track, and a track may not offer the preferred one.

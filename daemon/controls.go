@@ -327,10 +327,6 @@ func (p *AppPlayer) loadCurrentTrackOrSkip(ctx context.Context, paused, drop boo
 		return nil
 	}
 	var keyErr *audio.KeyProviderError
-	if errors.As(err, &keyErr) && keyErr.Code == keyRefusedNow {
-		p.app.log.WithError(err).Warnf("audio key refused for now, staying put: %s", p.state.player.Track.Uri)
-		return err
-	}
 	if errors.Is(err, librespot.ErrMediaRestricted) || errors.Is(err, librespot.ErrNoSupportedFormats) || errors.As(err, &keyErr) {
 		p.app.log.WithError(err).Warnf("current track unplayable, skipping forward: %s", p.state.player.Track.Uri)
 		if _, aerr := p.advanceNext(ctx, true, drop); aerr != nil {
@@ -830,12 +826,13 @@ func (p *AppPlayer) skipNext(ctx context.Context, track *connectpb.ContextTrack)
 // is a stampede at the very service that has just refused one.
 const maxConsecutiveUnplayableSkips = 8
 
-// keyRefusedNow is the audio key service saying no to this request rather than
-// to this track. Measured: a track refused with this code under a burst of
-// track changes plays perfectly a minute later. Skipping forward is the wrong
-// answer — the next track is refused too, and each attempt asks for another
-// key — so playback stops where it is and says so.
-const keyRefusedNow = 2
+// keyRefusedInContext is the audio key service refusing a track as part of the
+// context it sits in. Measured against a live account: the same track loads
+// perfectly when asked for on its own, and is refused every time as part of its
+// playlist — it is the licence for that pairing that is missing, not the track
+// and not the moment. There is nothing to wait for, so the player moves past it
+// and says which track it could not play.
+const keyRefusedInContext = 2
 
 func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool, error) {
 	var uri string
@@ -924,18 +921,14 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 	// Remove once proper key licensing (PlayPlay) is implemented — tracked separately.
 	var keyErr *audio.KeyProviderError
 	err := p.loadCurrentTrack(ctx, !hasNextTrack, drop)
-	if errors.As(err, &keyErr) && keyErr.Code == keyRefusedNow {
-		// Not this track's fault, and the next one would be refused as well.
-		p.app.log.WithError(err).Warnf("audio key refused for now, staying put: %s", uri)
-		p.consecutiveUnplayableSkips = 0
-		return false, err
-	}
 	if errors.Is(err, librespot.ErrMediaRestricted) || errors.Is(err, librespot.ErrNoSupportedFormats) || errors.As(err, &keyErr) {
 		if keyErr != nil {
 			p.app.log.WithError(err).Warnf("skipping track: Spotify refused the audio key (code %d) for this playback context: %s", keyErr.Code, uri)
 		} else {
 			p.app.log.WithError(err).Infof("skipping unplayable media: %s", uri)
 		}
+
+		p.unplayable = uri
 
 		// Walk forward through a run of unplayable tracks (a context whose first — or several —
 		// tracks are refused), bounded so a fully gated or RepeatingContext context advances to

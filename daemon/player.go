@@ -48,6 +48,9 @@ type AppPlayer struct {
 
 	spotConnId string
 
+	// unplayable is the last track Spotify refused an audio key for.
+	unplayable string
+
 	prodInfo    *ProductInfo
 	countryCode *string
 
@@ -485,6 +488,7 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 			Paused:         p.state.player.IsPaused,
 			Buffering:      p.state.player.IsBuffering,
 			PlayOrigin:     p.state.player.PlayOrigin.FeatureIdentifier,
+			Unplayable:     p.unplayable,
 		}
 
 		if p.primaryStream != nil && p.prodInfo != nil {
