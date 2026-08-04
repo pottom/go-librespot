@@ -338,6 +338,11 @@ func (p *AppPlayer) loadCurrentTrackOrSkip(ctx context.Context, paused, drop boo
 }
 
 func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) error {
+	// The outgoing track's tempo is worth keeping before it is forgotten: it is
+	// the only chance to record it, and it is what lets the queue show a tempo
+	// for something not currently playing.
+	p.rememberTempo()
+
 	// A new track has a new beat. Without this the last one lingers for as long
 	// as the analysis window is deep, which is long enough to be seen.
 	p.player.ResetTempo()

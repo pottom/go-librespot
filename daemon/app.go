@@ -44,6 +44,10 @@ type App struct {
 
 	audioCache *cache.Cache
 
+	// tempos remembers the beat rate of tracks already played, so a controller
+	// can show one for a track further down the queue.
+	tempos *tempoStore
+
 	closed bool
 }
 
@@ -131,6 +135,8 @@ func New(opts *Options) (*App, error) {
 	}
 
 	if app.cfg.Cache.Enabled && app.cfg.Cache.Dir != "" {
+		app.tempos = newTempoStore(app.cfg.Cache.Dir)
+
 		app.audioCache, err = cache.New(app.log, app.cfg.Cache.Dir, app.cfg.Cache.SizeLimit)
 		if err != nil {
 			return nil, fmt.Errorf("failed initializing audio cache: %w", err)

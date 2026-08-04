@@ -182,6 +182,11 @@ type ApiResponseStatusTrack struct {
 	TotalTracks   int      `json:"total_tracks"`
 	AlbumType     string   `json:"album_type"`
 	Popularity    int      `json:"popularity"`
+
+	// Tempo is the beat rate measured when this track was last played, or zero
+	// if it never has been. It cannot be had any other way: the audio has to be
+	// heard for a tempo to exist.
+	Tempo float64 `json:"tempo"`
 }
 
 func getBestImageIdForSize(images []*metadatapb.Image, size string) []byte {
@@ -332,6 +337,11 @@ type ApiResponseQueueTrack struct {
 	TotalTracks   int      `json:"total_tracks"`
 	AlbumType     string   `json:"album_type"`
 	Popularity    int      `json:"popularity"`
+
+	// Tempo is the beat rate measured when this track was last played, or zero
+	// if it never has been. It cannot be had any other way: the audio has to be
+	// heard for a tempo to exist.
+	Tempo float64 `json:"tempo"`
 }
 
 // ApiResponseWaveform is the sound itself: the samples most recently sent to

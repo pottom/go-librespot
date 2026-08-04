@@ -489,7 +489,7 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 
 		if p.primaryStream != nil && p.prodInfo != nil {
 			resp.Track = p.newApiResponseStatusTrack(p.primaryStream.Media, p.state.trackPosition())
-			resp.Tempo = p.player.Tempo()
+			resp.Tempo = p.rememberTempo()
 
 			if file := p.primaryStream.File; file != nil && file.Format != nil {
 				resp.Bitrate = player.GetFormatBitrate(*file.Format)
@@ -505,6 +505,7 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 		rows := make([]ApiResponseQueueTrack, 0, len(next)+1)
 		playing := 0
 		if current := p.state.player.Track; current != nil && current.Uri != "" {
+			p.rememberTempo()
 			rows = append(rows, ApiResponseQueueTrack{Uri: current.Uri, Uid: current.Uid})
 			playing = 1
 		}
@@ -516,6 +517,9 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 			})
 		}
 		p.describeQueue(ctx, rows)
+		for i := range rows {
+			rows[i].Tempo = p.app.tempos.Get(rows[i].Uri)
+		}
 
 		resp := &ApiResponseQueue{Tracks: rows[playing:]}
 		if playing == 1 {
