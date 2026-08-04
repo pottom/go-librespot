@@ -37,10 +37,10 @@ func (p *AppPlayer) contextTracks(ctx context.Context, uri string, offset, limit
 
 	// The pages are walked from the first: a context page is not addressable by
 	// track number, only by following the one before it.
-	var (
-		rows []ApiResponseQueueTrack
-		seen int
-	)
+	// Empty rather than nil: a page past the end of a context is an empty list,
+	// not the absence of one, and a caller decoding JSON should not have to
+	// tell those apart.
+	rows, seen := make([]ApiResponseQueueTrack, 0, limit), 0
 	for idx := 0; seen < offset+limit; idx++ {
 		page, err := resolver.Page(ctx, idx)
 		if errors.Is(err, io.EOF) {
