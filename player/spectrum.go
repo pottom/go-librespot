@@ -45,7 +45,11 @@ const (
 
 	// spectrumFloorDb is what counts as silence. Energy is spread over orders
 	// of magnitude, so the scale is in decibels or the bass is all anyone sees.
-	spectrumFloorDb = -70
+	// Measured: at seventy the whole beat of a track moved the bars by a fifth
+	// of a dot per frame, because a doubling in loudness is six decibels and
+	// six of seventy is nothing. A narrower window spends the height on the
+	// range music actually moves through.
+	spectrumFloorDb = -48
 
 	// The envelope rises at once and falls slowly, so a quiet passage opens up
 	// rather than flattening and a loud one does not clip.
@@ -61,8 +65,8 @@ const (
 
 	// Attack fast, release slow: what makes a meter feel like an instrument
 	// rather than a graph.
-	spectrumAttack  = 0.55
-	spectrumRelease = 0.12
+	spectrumAttack  = 0.8
+	spectrumRelease = 0.34
 )
 
 func newSpectrum(sampleRate int) *Spectrum {
@@ -138,6 +142,11 @@ func (s *Spectrum) analyse() {
 		db := 10 * math.Log10(power+1e-12)
 		level := (db - spectrumFloorDb) / -spectrumFloorDb
 		level = min(max(level, 0), 1)
+
+		// Stretched away from the middle: the ear hears a beat as a jump, and
+		// a scale that renders it as a nudge reads as a meter that is not
+		// listening.
+		level = level * level * (3 - 2*level)
 
 		rate := spectrumRelease
 		if float32(level) > s.bands[b] {
