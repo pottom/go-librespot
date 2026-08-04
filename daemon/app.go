@@ -134,9 +134,11 @@ func New(opts *Options) (*App, error) {
 		app.mpris = mpris.DummyServer{}
 	}
 
-	if app.cfg.Cache.Enabled && app.cfg.Cache.Dir != "" {
-		app.tempos = newTempoStore(app.cfg.Cache.Dir)
+	// Always present, with or without a cache directory: without one it simply
+	// remembers for as long as the daemon runs.
+	app.tempos = newTempoStore(app.cfg.Cache.Dir)
 
+	if app.cfg.Cache.Enabled && app.cfg.Cache.Dir != "" {
 		app.audioCache, err = cache.New(app.log, app.cfg.Cache.Dir, app.cfg.Cache.SizeLimit)
 		if err != nil {
 			return nil, fmt.Errorf("failed initializing audio cache: %w", err)
