@@ -10,7 +10,10 @@ import (
 
 // lyricsEndpoint is where Spotify's own client reads them from. It is not a
 // documented API and may move; a failure here costs the words, nothing else.
-const lyricsEndpoint = "https://spclient.wg.spotify.com/color-lyrics/v2/track/"
+const (
+	lyricsEndpoint  = "https://spclient.wg.spotify.com/color-lyrics/v2/track/"
+	lyricsUserAgent = "spindle"
+)
 
 // ApiResponseLyrics is the words of a track against the clock.
 //
@@ -72,6 +75,10 @@ func (p *AppPlayer) lyricsFor(ctx context.Context, trackId string) (*ApiResponse
 	// shows lyrics at all.
 	req.Header.Set("app-platform", "WebPlayer")
 	req.Header.Set("Accept", "application/json")
+	// Measured: the endpoint answers 403 to Go's default user agent and 200 to
+	// anything else, this one included. Naming ourselves is both the fix and
+	// the honest thing to send.
+	req.Header.Set("User-Agent", lyricsUserAgent)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
