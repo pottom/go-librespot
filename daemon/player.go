@@ -48,8 +48,12 @@ type AppPlayer struct {
 
 	spotConnId string
 
-	// unplayable is the last track Spotify refused an audio key for.
-	unplayable string
+	// unplayable is the last track Spotify refused an audio key for, and gave
+	// up on. keyRetry wakes the loop to try a refused track again, and
+	// keyAttempts counts how often it already has.
+	unplayable  string
+	keyRetry    chan struct{}
+	keyAttempts int
 
 	prodInfo    *ProductInfo
 	countryCode *string
@@ -843,8 +847,16 @@ func (p *AppPlayer) Run(ctx context.Context, apiRecv <-chan ApiRequest, mprisRec
 	p.stateTimer = time.NewTimer(time.Minute)
 	p.stateTimer.Stop() // armed on demand by updateState
 
+	p.keyRetry = make(chan struct{}, 1)
+
 	for {
 		select {
+		case <-p.keyRetry:
+			// The key service refused a moment ago; the track is still the one
+			// wanted, so ask again rather than moving on. See scheduleKeyRetry.
+			if err := p.loadCurrentTrackOrSkip(ctx, p.state.player.IsPaused, false); err != nil {
+				p.app.log.WithError(err).Warn("retry after a refused audio key failed")
+			}
 		case <-p.stop:
 			return
 		case <-ctx.Done():

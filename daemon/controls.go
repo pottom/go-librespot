@@ -327,6 +327,9 @@ func (p *AppPlayer) loadCurrentTrackOrSkip(ctx context.Context, paused, drop boo
 		return nil
 	}
 	var keyErr *audio.KeyProviderError
+	if errors.As(err, &keyErr) && keyErr.Code == keyRefusedForNow && p.scheduleKeyRetry(err) {
+		return nil
+	}
 	if errors.Is(err, librespot.ErrMediaRestricted) || errors.Is(err, librespot.ErrNoSupportedFormats) || errors.As(err, &keyErr) {
 		p.app.log.WithError(err).Warnf("current track unplayable, skipping forward: %s", p.state.player.Track.Uri)
 		if _, aerr := p.advanceNext(ctx, true, drop); aerr != nil {
@@ -335,6 +338,29 @@ func (p *AppPlayer) loadCurrentTrackOrSkip(ctx context.Context, paused, drop boo
 		return nil
 	}
 	return err
+}
+
+// scheduleKeyRetry arranges for the current track to be asked for again, and
+// reports whether it did. It gives up once the delays have run out: something
+// other than a busy key service is wrong by then, and a player that retries
+// forever is a player that never says anything.
+func (p *AppPlayer) scheduleKeyRetry(err error) bool {
+	if p.keyAttempts >= len(keyRetryDelays) || p.keyRetry == nil {
+		p.keyAttempts = 0
+		return false
+	}
+
+	delay := keyRetryDelays[p.keyAttempts]
+	p.keyAttempts++
+	p.app.log.WithError(err).Warnf("audio key refused, asking again in %s (attempt %d)", delay, p.keyAttempts)
+
+	time.AfterFunc(delay, func() {
+		select {
+		case p.keyRetry <- struct{}{}:
+		default: // one waiting retry is enough
+		}
+	})
+	return true
 }
 
 func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) error {
@@ -826,13 +852,20 @@ func (p *AppPlayer) skipNext(ctx context.Context, track *connectpb.ContextTrack)
 // is a stampede at the very service that has just refused one.
 const maxConsecutiveUnplayableSkips = 8
 
-// keyRefusedInContext is the audio key service refusing a track as part of the
-// context it sits in. Measured against a live account: the same track loads
-// perfectly when asked for on its own, and is refused every time as part of its
-// playlist — it is the licence for that pairing that is missing, not the track
-// and not the moment. There is nothing to wait for, so the player moves past it
-// and says which track it could not play.
-const keyRefusedInContext = 2
+// keyRefusedForNow is the audio key service refusing because it has been asked
+// too often, not because of anything about the track.
+//
+// Measured against a live account: six track starts 400ms apart are enough, and
+// from then on every track is refused — including one that played five seconds
+// earlier. Nine seconds later the same track plays again. So the answer is to
+// wait and ask for the same track again; moving on to the next one is exactly
+// wrong, because that one is refused too and each attempt is another request at
+// the service that is already saying no.
+const keyRefusedForNow = 2
+
+// keyRetryDelays are how long to wait before asking again, and how many times.
+// They cover the ten seconds the refusal was measured to last.
+var keyRetryDelays = []time.Duration{2 * time.Second, 3 * time.Second, 5 * time.Second}
 
 func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool, error) {
 	var uri string
@@ -921,6 +954,9 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 	// Remove once proper key licensing (PlayPlay) is implemented — tracked separately.
 	var keyErr *audio.KeyProviderError
 	err := p.loadCurrentTrack(ctx, !hasNextTrack, drop)
+	if errors.As(err, &keyErr) && keyErr.Code == keyRefusedForNow && p.scheduleKeyRetry(err) {
+		return true, nil
+	}
 	if errors.Is(err, librespot.ErrMediaRestricted) || errors.Is(err, librespot.ErrNoSupportedFormats) || errors.As(err, &keyErr) {
 		if keyErr != nil {
 			p.app.log.WithError(err).Warnf("skipping track: Spotify refused the audio key (code %d) for this playback context: %s", keyErr.Code, uri)
@@ -942,6 +978,7 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 		return p.advanceNext(ctx, true, drop)
 	} else if err != nil {
 		p.consecutiveUnplayableSkips = 0
+		p.keyAttempts = 0
 		return false, fmt.Errorf("failed loading current track (advance to %s): %w", uri, err)
 	}
 
