@@ -178,6 +178,7 @@ type ApiResponseStatusTrack struct {
 	ReleaseDate   string   `json:"release_date"`
 	TrackNumber   int      `json:"track_number"`
 	DiscNumber    int      `json:"disc_number"`
+	TotalTracks   int      `json:"total_tracks"`
 }
 
 func getBestImageIdForSize(images []*metadatapb.Image, size string) []byte {
@@ -315,6 +316,7 @@ type ApiResponseQueueTrack struct {
 	ReleaseDate   string   `json:"release_date"`
 	TrackNumber   int      `json:"track_number"`
 	DiscNumber    int      `json:"disc_number"`
+	TotalTracks   int      `json:"total_tracks"`
 }
 
 type ApiResponseRoot struct {

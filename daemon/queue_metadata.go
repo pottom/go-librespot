@@ -96,6 +96,9 @@ func (p *AppPlayer) describeTrack(out *ApiResponseQueueTrack, track *metadatapb.
 	out.ReleaseDate = track.Album.Date.String()
 	out.TrackNumber = int(intOr(track.Number))
 	out.DiscNumber = int(intOr(track.DiscNumber))
+	for _, disc := range track.Album.Disc {
+		out.TotalTracks += len(disc.Track)
+	}
 }
 
 func valueOr(s *string) string {
