@@ -693,6 +693,9 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 		}
 		p.setQueueTracks(ctx, queued)
 		return nil, nil
+	case ApiRequestTypeContext:
+		data := req.Data.(ApiRequestDataContext)
+		return p.contextTracks(ctx, data.Uri, data.Offset, data.Limit)
 	case ApiRequestTypeReorder:
 		if err := p.reorderTracks(ctx, req.Data.([]string)); err != nil {
 			return nil, err

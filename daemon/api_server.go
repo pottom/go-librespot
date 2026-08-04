@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,7 @@ const (
 	ApiRequestTypeAddToQueue          ApiRequestType = "add_to_queue"
 	ApiRequestTypeSetQueue            ApiRequestType = "set_queue"
 	ApiRequestTypeReorder             ApiRequestType = "reorder"
+	ApiRequestTypeContext             ApiRequestType = "context"
 	ApiRequestTypeQueue               ApiRequestType = "queue"
 	ApiRequestTypePlayFrom            ApiRequestType = "play_from"
 	ApiRequestTypeDrop                ApiRequestType = "drop"
@@ -155,6 +157,13 @@ type ApiRequestDataPlay struct {
 	// Position is the position in milliseconds to start playback at within the
 	// selected track. Zero starts from the beginning.
 	Position int64 `json:"position"`
+}
+
+// ApiRequestDataContext asks what a context holds, a page at a time.
+type ApiRequestDataContext struct {
+	Uri    string
+	Offset int
+	Limit  int
 }
 
 // ApiRequestDataPlayFrom names a track already coming up.
@@ -316,6 +325,15 @@ type ApiResponseStatus struct {
 type ApiResponseQueue struct {
 	Current *ApiResponseQueueTrack  `json:"current"`
 	Tracks  []ApiResponseQueueTrack `json:"tracks"`
+}
+
+// ApiResponseContext is what a playlist, album or artist holds, a page at a
+// time. It reuses the queue's track shape: the two lists are read by the same
+// screens and there is nothing in one that the other does not want.
+type ApiResponseContext struct {
+	Uri    string                  `json:"uri"`
+	Offset int                     `json:"offset"`
+	Tracks []ApiResponseQueueTrack `json:"tracks"`
 }
 
 // ApiResponseQueueTrack is one upcoming track, named as well as identified.
@@ -806,6 +824,23 @@ func (s *ConcreteApiServer) serve() {
 		}
 
 		s.handleRequest(ApiRequest{Type: ApiRequestTypeSetQueue, Data: data.Uris}, w)
+	})
+	m.HandleFunc("/player/context", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		q := r.URL.Query()
+		offset, _ := strconv.Atoi(q.Get("offset"))
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		if limit == 0 {
+			limit = maxContextTracks
+		}
+		s.handleRequest(ApiRequest{
+			Type: ApiRequestTypeContext,
+			Data: ApiRequestDataContext{Uri: q.Get("uri"), Offset: offset, Limit: limit},
+		}, w)
 	})
 	m.HandleFunc("/player/reorder", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {

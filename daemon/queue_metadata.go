@@ -8,12 +8,12 @@ import (
 	metadatapb "github.com/devgianlu/go-librespot/proto/spotify/metadata"
 )
 
-// maxQueueMetadata caps how many upcoming tracks are named in one go. The list
-// is asked for whenever a controller opens its queue screen, and a context can
-// run to hundreds of tracks; nobody reads that far down.
+// maxQueueMetadata is how many tracks are named in one request. Longer lists
+// are named in several: the limit belongs to the metadata endpoint, not to the
+// screen asking.
 const maxQueueMetadata = 50
 
-// describeQueue fills in the names of the upcoming tracks, in one request.
+// describeQueue fills in the names of a list of tracks.
 //
 // A failure is not fatal: the queue is still an ordered list of ids, and a
 // controller that cannot name a track can still show its place and act on it.
@@ -21,10 +21,18 @@ func (p *AppPlayer) describeQueue(ctx context.Context, tracks []ApiResponseQueue
 	if len(tracks) == 0 || p.prodInfo == nil {
 		return
 	}
-	if len(tracks) > maxQueueMetadata {
-		tracks = tracks[:maxQueueMetadata]
-	}
 
+	// One request per batch: the cap is what the endpoint will answer for at
+	// once, not what a caller may ask about.
+	for len(tracks) > maxQueueMetadata {
+		p.describeBatch(ctx, tracks[:maxQueueMetadata])
+		tracks = tracks[maxQueueMetadata:]
+	}
+	p.describeBatch(ctx, tracks)
+}
+
+// describeBatch names one request's worth of them.
+func (p *AppPlayer) describeBatch(ctx context.Context, tracks []ApiResponseQueueTrack) {
 	req := &extmetadatapb.BatchedEntityRequest{}
 	for _, track := range tracks {
 		if track.Uri == "" {
