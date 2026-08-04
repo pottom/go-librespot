@@ -97,13 +97,31 @@ func (p *AppPlayer) describeTrack(out *ApiResponseQueueTrack, track *metadatapb.
 	out.ReleaseDate = track.Album.Date.String()
 	out.TrackNumber = int(intOr(track.Number))
 	out.DiscNumber = int(intOr(track.DiscNumber))
-	for _, disc := range track.Album.Disc {
-		out.TotalTracks += len(disc.Track)
-	}
-	if track.Album.Type != nil {
-		out.AlbumType = strings.ToLower(track.Album.Type.String())
-	}
+	out.TotalTracks = albumTrackCount(track.Album)
+	out.AlbumType = albumTypeName(track.Album)
 	out.Popularity = int(intOr(track.Popularity))
+}
+
+// albumTrackCount is how many tracks the album holds, across its discs. The
+// metadata does not always carry the listing, in which case there is no count
+// to give.
+func albumTrackCount(album *metadatapb.Album) int {
+	if album == nil {
+		return 0
+	}
+	var n int
+	for _, disc := range album.Disc {
+		n += len(disc.Track)
+	}
+	return n
+}
+
+// albumTypeName is "album", "single" or "compilation".
+func albumTypeName(album *metadatapb.Album) string {
+	if album == nil || album.Type == nil {
+		return ""
+	}
+	return strings.ToLower(album.Type.String())
 }
 
 func valueOr(s *string) string {

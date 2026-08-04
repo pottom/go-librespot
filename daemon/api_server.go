@@ -250,6 +250,9 @@ func (p *AppPlayer) newApiResponseStatusTrack(media *librespot.Media, position i
 			ReleaseDate:   track.Album.Date.String(),
 			TrackNumber:   int(*track.Number),
 			DiscNumber:    int(*track.DiscNumber),
+			TotalTracks:   albumTrackCount(track.Album),
+			AlbumType:     albumTypeName(track.Album),
+			Popularity:    int(intOr(track.Popularity)),
 		}
 	} else {
 		episode := media.Episode()
