@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"time"
 
 	librespot "github.com/devgianlu/go-librespot"
@@ -57,6 +58,10 @@ type Player struct {
 	cdnQuarantine map[string]time.Time
 
 	newOutput func(source librespot.Float32Reader, volume float32, device string) (output.Output, error)
+
+	// tap watches the samples on their way out, so a controller can draw what
+	// is being heard. It is created with the output and lives as long as it.
+	tap atomic.Pointer[tap]
 
 	// defaultAudioDevice is the output device to open initially. manageLoop
 	// tracks the current device from here and it can be changed at runtime via
@@ -195,29 +200,34 @@ func NewPlayer(opts *Options) (*Player, error) {
 		normalisationPregain:      opts.NormalisationPregain,
 		countryCode:               opts.CountryCode,
 		defaultAudioDevice:        opts.AudioDevice,
-		newOutput: func(reader librespot.Float32Reader, volume float32, device string) (output.Output, error) {
-			return output.NewOutput(&output.NewOutputOptions{
-				Log:              opts.Log,
-				Backend:          opts.AudioBackend,
-				Reader:           reader,
-				SampleRate:       SampleRate,
-				ChannelCount:     Channels,
-				Device:           device,
-				RuntimeSocket:    opts.AudioBackendRuntimeSocket,
-				Mixer:            opts.MixerDevice,
-				Control:          opts.MixerControlName,
-				InitialVolume:    volume,
-				BufferTimeMicro:  opts.AudioBufferTime,
-				PeriodCount:      opts.AudioPeriodCount,
-				ExternalVolume:   opts.ExternalVolume,
-				VolumeUpdate:     opts.VolumeUpdate,
-				OutputPipe:       opts.AudioOutputPipe,
-				OutputPipeFormat: opts.AudioOutputPipeFormat,
-			})
-		},
+		cmd:                       make(chan playerCmd),
+		ev:                        make(chan Event, 128),
+	}
 
-		cmd: make(chan playerCmd),
-		ev:  make(chan Event, 128),
+	// The tap sits between the mixer and the device, so what it sees is what is
+	// heard — after normalisation and crossfade, before the output's volume.
+	p.newOutput = func(reader librespot.Float32Reader, volume float32, device string) (output.Output, error) {
+		t := newTap(reader, SampleRate, Channels, tapFrameRate)
+		p.tap.Store(t)
+
+		return output.NewOutput(&output.NewOutputOptions{
+			Log:              opts.Log,
+			Backend:          opts.AudioBackend,
+			Reader:           t,
+			SampleRate:       SampleRate,
+			ChannelCount:     Channels,
+			Device:           device,
+			RuntimeSocket:    opts.AudioBackendRuntimeSocket,
+			Mixer:            opts.MixerDevice,
+			Control:          opts.MixerControlName,
+			InitialVolume:    volume,
+			BufferTimeMicro:  opts.AudioBufferTime,
+			PeriodCount:      opts.AudioPeriodCount,
+			ExternalVolume:   opts.ExternalVolume,
+			VolumeUpdate:     opts.VolumeUpdate,
+			OutputPipe:       opts.AudioOutputPipe,
+			OutputPipeFormat: opts.AudioOutputPipeFormat,
+		})
 	}
 
 	go p.manageLoop()

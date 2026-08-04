@@ -77,6 +77,7 @@ const (
 	ApiRequestTypeQueue               ApiRequestType = "queue"
 	ApiRequestTypePlayFrom            ApiRequestType = "play_from"
 	ApiRequestTypeDrop                ApiRequestType = "drop"
+	ApiRequestTypeWaveform            ApiRequestType = "waveform"
 	ApiRequestTypeToken               ApiRequestType = "token"
 	ApiRequestSetDeviceName           ApiRequestType = "set_device_name"
 	ApiRequestTypeReopenOutput        ApiRequestType = "reopen_output"
@@ -325,6 +326,12 @@ type ApiResponseQueueTrack struct {
 	TotalTracks   int      `json:"total_tracks"`
 	AlbumType     string   `json:"album_type"`
 	Popularity    int      `json:"popularity"`
+}
+
+// ApiResponseWaveform is the sound itself: the samples most recently sent to
+// the audio device, oldest first, each in -1..1.
+type ApiResponseWaveform struct {
+	Samples []float32 `json:"samples"`
 }
 
 type ApiResponseRoot struct {
@@ -695,6 +702,14 @@ func (s *ConcreteApiServer) serve() {
 		}
 
 		s.handleRequest(ApiRequest{Type: ApiRequestTypeAddToQueue, Data: data.Uri}, w)
+	})
+	m.HandleFunc("/player/waveform", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		s.handleRequest(ApiRequest{Type: ApiRequestTypeWaveform}, w)
 	})
 	m.HandleFunc("/player/queue", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
