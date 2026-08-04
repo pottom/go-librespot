@@ -45,11 +45,7 @@ const (
 
 	// spectrumFloorDb is what counts as silence. Energy is spread over orders
 	// of magnitude, so the scale is in decibels or the bass is all anyone sees.
-	// Measured: at seventy the whole beat of a track moved the bars by a fifth
-	// of a dot per frame, because a doubling in loudness is six decibels and
-	// six of seventy is nothing. A narrower window spends the height on the
-	// range music actually moves through.
-	spectrumFloorDb = -48
+	spectrumFloorDb = -70
 
 	// The envelope rises at once and falls slowly, so a quiet passage opens up
 	// rather than flattening and a loud one does not clip.
@@ -61,7 +57,12 @@ const (
 
 	// spectrumHeadroom is how much of the scale the loudest band takes, leaving
 	// somewhere for something louder to go.
-	spectrumHeadroom = 0.92
+	spectrumHeadroom = 0.98
+
+	// spectrumContrast spreads the bands apart. Below one it lifts the quiet
+	// ones so a mix fills the height; the movement then reads as movement
+	// rather than as a nudge at the bottom of the scale.
+	spectrumContrast = 0.65
 
 	// Attack fast, release slow: what makes a meter feel like an instrument
 	// rather than a graph.
@@ -143,11 +144,6 @@ func (s *Spectrum) analyse() {
 		level := (db - spectrumFloorDb) / -spectrumFloorDb
 		level = min(max(level, 0), 1)
 
-		// Stretched away from the middle: the ear hears a beat as a jump, and
-		// a scale that renders it as a nudge reads as a meter that is not
-		// listening.
-		level = level * level * (3 - 2*level)
-
 		rate := spectrumRelease
 		if float32(level) > s.bands[b] {
 			rate = spectrumAttack
@@ -162,7 +158,13 @@ func (s *Spectrum) analyse() {
 	}
 	s.envelope = max(max(peak, s.envelope*spectrumEnvRelease), spectrumEnvFloor)
 	for b := range s.bands {
-		s.bands[b] = min(s.bands[b]/s.envelope*spectrumHeadroom, 1)
+		v := min(s.bands[b]/s.envelope, 1)
+
+		// Stretched once the level is relative to the loudest band, not before.
+		// Applied to the raw decibels it flattened both ends of the scale — and
+		// most of a spectrum lives at the quiet end, so the bars stopped moving
+		// almost entirely.
+		s.bands[b] = float32(math.Pow(float64(v), spectrumContrast)) * spectrumHeadroom
 	}
 }
 
