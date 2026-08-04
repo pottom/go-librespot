@@ -103,7 +103,6 @@ func (p *AppPlayer) describeTrack(out *ApiResponseQueueTrack, track *metadatapb.
 	if track.Album.Type != nil {
 		out.AlbumType = strings.ToLower(track.Album.Type.String())
 	}
-	out.Popularity = int(intOr(track.Popularity))
 }
 
 func valueOr(s *string) string {
