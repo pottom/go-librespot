@@ -294,9 +294,13 @@ type ApiResponseStatus struct {
 	Format  string `json:"format"`
 }
 
-// ApiResponseQueue lists what is coming, in order.
+// ApiResponseQueue lists what is playing and what is coming, in order. The
+// playing track is described here as well as in the status, because only here
+// is it named from the same metadata the rest of the list is: the status is
+// built from the stream, which carries less.
 type ApiResponseQueue struct {
-	Tracks []ApiResponseQueueTrack `json:"tracks"`
+	Current *ApiResponseQueueTrack  `json:"current"`
+	Tracks  []ApiResponseQueueTrack `json:"tracks"`
 }
 
 // ApiResponseQueueTrack is one upcoming track, named as well as identified.

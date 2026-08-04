@@ -499,15 +499,27 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 		return resp, nil
 	case ApiRequestTypeQueue:
 		next := p.state.player.NextTracks
-		resp := &ApiResponseQueue{Tracks: make([]ApiResponseQueueTrack, 0, len(next))}
+		// The playing track rides at the front of the same slice, so it is
+		// named by the same request as everything behind it.
+		rows := make([]ApiResponseQueueTrack, 0, len(next)+1)
+		playing := 0
+		if current := p.state.player.Track; current != nil && current.Uri != "" {
+			rows = append(rows, ApiResponseQueueTrack{Uri: current.Uri, Uid: current.Uid})
+			playing = 1
+		}
 		for _, track := range next {
-			resp.Tracks = append(resp.Tracks, ApiResponseQueueTrack{
+			rows = append(rows, ApiResponseQueueTrack{
 				Uri:    track.Uri,
 				Uid:    track.Uid,
 				Queued: track.Metadata["is_queued"] == "true",
 			})
 		}
-		p.describeQueue(ctx, resp.Tracks)
+		p.describeQueue(ctx, rows)
+
+		resp := &ApiResponseQueue{Tracks: rows[playing:]}
+		if playing == 1 {
+			resp.Current = &rows[0]
+		}
 		return resp, nil
 	case ApiRequestTypePlayFrom:
 		data := req.Data.(ApiRequestDataPlayFrom)
