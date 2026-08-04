@@ -507,6 +507,7 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 				Queued: track.Metadata["is_queued"] == "true",
 			})
 		}
+		p.describeQueue(ctx, resp.Tracks)
 		return resp, nil
 	case ApiRequestTypePlayFrom:
 		data := req.Data.(ApiRequestDataPlayFrom)

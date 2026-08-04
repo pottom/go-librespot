@@ -296,13 +296,25 @@ type ApiResponseQueue struct {
 	Tracks []ApiResponseQueueTrack `json:"tracks"`
 }
 
-// ApiResponseQueueTrack is one upcoming track. Queued says whether it was put
-// there by hand, which is the only part of the queue that can be edited: the
-// rest comes from the context and moves only as the context is walked.
+// ApiResponseQueueTrack is one upcoming track, named as well as identified.
+//
+// The metadata comes with it because the device's list is the only correct one:
+// the Web API answers with the server's copy, which lags behind anything a
+// controller has just edited, and looks the tracks up under ids of its own that
+// the device will not answer to.
 type ApiResponseQueueTrack struct {
 	Uri    string `json:"uri"`
 	Uid    string `json:"uid"`
 	Queued bool   `json:"queued"`
+
+	Name          string   `json:"name"`
+	ArtistNames   []string `json:"artist_names"`
+	AlbumName     string   `json:"album_name"`
+	AlbumCoverUrl *string  `json:"album_cover_url"`
+	Duration      int      `json:"duration"`
+	ReleaseDate   string   `json:"release_date"`
+	TrackNumber   int      `json:"track_number"`
+	DiscNumber    int      `json:"disc_number"`
 }
 
 type ApiResponseRoot struct {
