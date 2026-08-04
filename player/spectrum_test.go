@@ -101,3 +101,28 @@ func TestFFTFindsASingleBin(t *testing.T) {
 		}
 	}
 }
+
+// A tone has to read as a level, not as a wall. The transform is unscaled, so
+// without normalising by the window every band pinned to the top of the scale
+// whatever was playing — which looks exactly like nothing at all.
+func TestSpectrumLevelsAreNotPinned(t *testing.T) {
+	s := newSpectrum(SampleRate)
+	s.feed(tone(400, 1), Channels)
+
+	bands := s.Bands()
+	at := loudest(bands)
+	if bands[at] < 0.2 {
+		t.Errorf("the tone reads %.2f, want it clearly visible", bands[at])
+	}
+
+	// Everything away from the tone has to be far below it.
+	var pinned int
+	for i, v := range bands {
+		if i != at && v > bands[at]*0.6 {
+			pinned++
+		}
+	}
+	if pinned > 2 {
+		t.Errorf("%d bands sit near the tone's level, want a peak rather than a wall", pinned)
+	}
+}

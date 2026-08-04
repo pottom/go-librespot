@@ -112,6 +112,11 @@ func (s *Spectrum) analyse() {
 		}
 		power /= float64(hi - lo)
 
+		// Normalised by the window: the transform is unscaled, so without this
+		// a bin's magnitude grows with the analysis size and every band pins
+		// to the top of the scale whatever is playing.
+		power /= float64(spectrumSize) * float64(spectrumSize)
+
 		// Decibels against the floor, then folded onto 0..1.
 		db := 10 * math.Log10(power+1e-12)
 		level := (db - spectrumFloorDb) / -spectrumFloorDb
