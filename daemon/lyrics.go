@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 )
+
+// lyricsEndpoint is where Spotify's own client reads them from. It is not a
+// documented API and may move; a failure here costs the words, nothing else.
+const lyricsEndpoint = "https://spclient.wg.spotify.com/color-lyrics/v2/track/"
 
 // ApiResponseLyrics is the words of a track against the clock.
 //
@@ -51,11 +54,26 @@ func (p *AppPlayer) lyricsFor(ctx context.Context, trackId string) (*ApiResponse
 		return nil, nil
 	}
 
-	resp, err := p.sess.Spclient().Request(ctx, "GET",
-		"/color-lyrics/v2/track/"+trackId,
-		url.Values{"format": []string{"json"}, "market": []string{"from_token"}},
-		http.Header{"app-platform": []string{"WebPlayer"}},
-		nil)
+	// Asked for directly rather than through the Spclient helper: that signs
+	// requests with a token this endpoint refuses, while the access token the
+	// session hands out is the one it accepts.
+	token, err := p.sess.Spclient().GetAccessToken(ctx, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed getting token for lyrics: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		lyricsEndpoint+trackId+"?format=json&market=from_token", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed building lyrics request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	// Without this the endpoint answers as though the client were not one that
+	// shows lyrics at all.
+	req.Header.Set("app-platform", "WebPlayer")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed fetching lyrics: %w", err)
 	}
