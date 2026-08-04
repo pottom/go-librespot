@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 
 	extmetadatapb "github.com/devgianlu/go-librespot/proto/spotify/extendedmetadata"
 	metadatapb "github.com/devgianlu/go-librespot/proto/spotify/metadata"
@@ -99,6 +100,10 @@ func (p *AppPlayer) describeTrack(out *ApiResponseQueueTrack, track *metadatapb.
 	for _, disc := range track.Album.Disc {
 		out.TotalTracks += len(disc.Track)
 	}
+	if track.Album.Type != nil {
+		out.AlbumType = strings.ToLower(track.Album.Type.String())
+	}
+	out.Popularity = int(intOr(track.Popularity))
 }
 
 func valueOr(s *string) string {
