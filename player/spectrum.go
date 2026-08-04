@@ -62,7 +62,7 @@ const (
 	// spectrumContrast spreads the bands apart. Below one it lifts the quiet
 	// ones so a mix fills the height; the movement then reads as movement
 	// rather than as a nudge at the bottom of the scale.
-	spectrumContrast = 0.65
+	spectrumContrast = 1.0
 
 	// Attack fast, release slow: what makes a meter feel like an instrument
 	// rather than a graph.
