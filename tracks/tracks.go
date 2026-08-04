@@ -2,6 +2,7 @@ package tracks
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"time"
@@ -501,7 +502,28 @@ func (tl *List) queueTracks(next []*connectpb.ContextTrack) {
 		tl.queue = nil
 	}
 
+	// A track cannot be waiting twice. The callers build their lists from three
+	// places — the queue, the tracks they took from the context, and the ones
+	// they passed on the way — and the same song can be in more than one of
+	// them: a context track copied into the queue by an earlier move is still
+	// sitting in the context as well. Whichever copy comes first is the one the
+	// caller means, and a second is a track the user would hear twice without
+	// ever having asked for it.
+	//
+	// Adding the same track to the queue by hand still works: AddToQueue does
+	// not come through here.
+	seen := make(map[string]bool, len(next)+1)
+	for _, track := range tl.queue {
+		seen[tl.trackKey(track)] = true
+	}
+
 	for i, track := range next {
+		key := tl.trackKey(track)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
 		uid := track.Uid
 		if uid == "" {
 			uid = fmt.Sprintf("q%d", i)
@@ -513,6 +535,22 @@ func (tl *List) queueTracks(next []*connectpb.ContextTrack) {
 			Metadata: map[string]string{"is_queued": "true"},
 		})
 	}
+}
+
+// trackKey identifies a track for the purpose of not queueing it twice. A
+// context track carries a uri, a gid, or both, depending on where it came
+// from — the queue is set by uri and the context arrives by gid — so the gid is
+// resolved to a uri rather than compared as it stands. This is the same
+// identity ContextTrackComparator matches on, minus the uid, which is a place
+// in a list rather than a name for a track.
+func (tl *List) trackKey(track *connectpb.ContextTrack) string {
+	if len(track.Uri) > 0 {
+		return track.Uri
+	}
+	if len(track.Gid) > 0 && tl.ctx != nil {
+		return librespot.SpotifyIdFromGid(tl.ctx.Type(), track.Gid).Uri()
+	}
+	return "gid:" + hex.EncodeToString(track.Gid)
 }
 
 // Drop removes the matching upcoming track from the list, keeping every other
