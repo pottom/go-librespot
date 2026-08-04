@@ -538,6 +538,16 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 			return nil, err
 		}
 		return nil, nil
+	case ApiRequestTypeLyrics:
+		uri, _ := req.Data.(string)
+		if uri == "" && p.state.player.Track != nil {
+			uri = p.state.player.Track.Uri
+		}
+		id, err := librespot.SpotifyIdFromUri(uri)
+		if err != nil {
+			return nil, fmt.Errorf("failed parsing track uri for lyrics: %w", err)
+		}
+		return p.lyricsFor(ctx, id.Base62())
 	case ApiRequestTypeWaveform:
 		return &ApiResponseWaveform{Samples: p.player.Waveform()}, nil
 	case ApiRequestTypeResume:

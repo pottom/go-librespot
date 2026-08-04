@@ -78,6 +78,7 @@ const (
 	ApiRequestTypePlayFrom            ApiRequestType = "play_from"
 	ApiRequestTypeDrop                ApiRequestType = "drop"
 	ApiRequestTypeWaveform            ApiRequestType = "waveform"
+	ApiRequestTypeLyrics              ApiRequestType = "lyrics"
 	ApiRequestTypeToken               ApiRequestType = "token"
 	ApiRequestSetDeviceName           ApiRequestType = "set_device_name"
 	ApiRequestTypeReopenOutput        ApiRequestType = "reopen_output"
@@ -718,6 +719,14 @@ func (s *ConcreteApiServer) serve() {
 		}
 
 		s.handleRequest(ApiRequest{Type: ApiRequestTypeAddToQueue, Data: data.Uri}, w)
+	})
+	m.HandleFunc("/player/lyrics", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		s.handleRequest(ApiRequest{Type: ApiRequestTypeLyrics, Data: r.URL.Query().Get("uri")}, w)
 	})
 	m.HandleFunc("/player/waveform", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
