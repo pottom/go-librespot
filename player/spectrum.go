@@ -21,6 +21,11 @@ type Spectrum struct {
 
 	bands []float32 // smoothed, 0..1
 	edges []int     // bin where each band starts
+
+	// envelope follows the loudest band lately, so the display fills its scale
+	// whatever the material. Measured against a live stream, a mix that sounded
+	// full used barely a third of the range at a fixed floor.
+	envelope float32
 }
 
 const (
@@ -41,6 +46,18 @@ const (
 	// spectrumFloorDb is what counts as silence. Energy is spread over orders
 	// of magnitude, so the scale is in decibels or the bass is all anyone sees.
 	spectrumFloorDb = -70
+
+	// The envelope rises at once and falls slowly, so a quiet passage opens up
+	// rather than flattening and a loud one does not clip.
+	spectrumEnvRelease = 0.995
+
+	// spectrumEnvFloor stops the gain running away in silence, where the only
+	// thing left to amplify is the noise.
+	spectrumEnvFloor = 0.08
+
+	// spectrumHeadroom is how much of the scale the loudest band takes, leaving
+	// somewhere for something louder to go.
+	spectrumHeadroom = 0.92
 
 	// Attack fast, release slow: what makes a meter feel like an instrument
 	// rather than a graph.
@@ -127,6 +144,16 @@ func (s *Spectrum) analyse() {
 			rate = spectrumAttack
 		}
 		s.bands[b] += (float32(level) - s.bands[b]) * float32(rate)
+	}
+
+	// Scaled to the loudest band lately, so the bars use the height they have.
+	var peak float32
+	for _, v := range s.bands {
+		peak = max(peak, v)
+	}
+	s.envelope = max(max(peak, s.envelope*spectrumEnvRelease), spectrumEnvFloor)
+	for b := range s.bands {
+		s.bands[b] = min(s.bands[b]/s.envelope*spectrumHeadroom, 1)
 	}
 }
 
