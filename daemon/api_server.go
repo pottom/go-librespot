@@ -79,6 +79,7 @@ const (
 	ApiRequestTypeDrop                ApiRequestType = "drop"
 	ApiRequestTypeWaveform            ApiRequestType = "waveform"
 	ApiRequestTypeLyrics              ApiRequestType = "lyrics"
+	ApiRequestTypeSpectrum            ApiRequestType = "spectrum"
 	ApiRequestTypeToken               ApiRequestType = "token"
 	ApiRequestSetDeviceName           ApiRequestType = "set_device_name"
 	ApiRequestTypeReopenOutput        ApiRequestType = "reopen_output"
@@ -347,6 +348,15 @@ type ApiResponseQueueTrack struct {
 
 // ApiResponseWaveform is the sound itself: the samples most recently sent to
 // the audio device, oldest first, each in -1..1.
+// ApiResponseSpectrum is how the energy is spread across the frequency range,
+// lowest band first. Measured on the full sample stream: the decimated one the
+// waveform uses folds everything above a fifth of the sample rate back down,
+// which a trace never shows but a spectrum would report as energy that is not
+// there.
+type ApiResponseSpectrum struct {
+	Bands []float32 `json:"bands"`
+}
+
 type ApiResponseWaveform struct {
 	Samples []float32 `json:"samples"`
 }
@@ -727,6 +737,14 @@ func (s *ConcreteApiServer) serve() {
 		}
 
 		s.handleRequest(ApiRequest{Type: ApiRequestTypeLyrics, Data: r.URL.Query().Get("uri")}, w)
+	})
+	m.HandleFunc("/player/spectrum", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		s.handleRequest(ApiRequest{Type: ApiRequestTypeSpectrum}, w)
 	})
 	m.HandleFunc("/player/waveform", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {

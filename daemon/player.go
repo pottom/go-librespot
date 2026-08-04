@@ -548,6 +548,8 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 			return nil, fmt.Errorf("failed parsing track uri for lyrics: %w", err)
 		}
 		return p.lyricsFor(ctx, id.Base62())
+	case ApiRequestTypeSpectrum:
+		return &ApiResponseSpectrum{Bands: p.player.Spectrum()}, nil
 	case ApiRequestTypeWaveform:
 		return &ApiResponseWaveform{Samples: p.player.Waveform()}, nil
 	case ApiRequestTypeResume:

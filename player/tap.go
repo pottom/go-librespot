@@ -33,6 +33,7 @@ type tap struct {
 	// tempo listens to the same samples. It wants every one of them, not the
 	// decimated few the waveform keeps, so it is fed separately.
 	tempo    *Tempo
+	spectrum *Spectrum
 	channels int
 
 	mu    sync.Mutex
@@ -53,6 +54,7 @@ func newTap(inner librespot.Float32Reader, rate, channels, fps int) *tap {
 	return &tap{
 		inner:    inner,
 		tempo:    newTempo(),
+		spectrum: newSpectrum(rate),
 		channels: channels,
 		frame:    make([]float32, TapSamples),
 		every:    every * channels,
@@ -64,6 +66,7 @@ func (t *tap) Read(p []float32) (int, error) {
 	if n > 0 {
 		t.absorb(p[:n])
 		t.tempo.feed(p[:n], t.channels)
+		t.spectrum.feed(p[:n], t.channels)
 	}
 	return n, err
 }
@@ -126,11 +129,22 @@ func (p *Player) Tempo() float64 {
 	return bpm
 }
 
+// Spectrum is how the energy of what is playing is spread across the frequency
+// range, lowest first, each 0..1. Nil when nothing has played yet.
+func (p *Player) Spectrum() []float32 {
+	t := p.tap.Load()
+	if t == nil {
+		return nil
+	}
+	return t.spectrum.Bands()
+}
+
 // ResetTempo forgets what has been heard, for when the track changes. Without
 // it the previous track's beat lingers for as long as the analysis window is
 // deep.
 func (p *Player) ResetTempo() {
 	if t := p.tap.Load(); t != nil {
 		t.tempo.Reset()
+		t.spectrum.Reset()
 	}
 }
