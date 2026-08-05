@@ -249,6 +249,15 @@ func (p *Player) manageLoop() {
 	// current output device; can be changed at runtime via playerCmdReopenOutput
 	device := p.defaultAudioDevice
 
+	// An output that gives up on its own is worth trying again: a device is
+	// lost when headphones are unplugged, when a machine wakes, or when
+	// CoreAudio decides the queue is done — none of which is a reason for the
+	// music to be over. retryAt fires when it is time to try, and retries
+	// counts how many have been spent, so a device that is really gone stops
+	// being asked.
+	var retryAt <-chan time.Time
+	retries := 0
+
 	// init main source
 	source := NewSwitchingAudioSource(p.crossfadeSamples)
 
@@ -275,6 +284,9 @@ loop:
 					}
 
 					outErr = out.Error()
+					// A device that opens is a device that works, whatever it
+					// did before: the tally of failed attempts starts again.
+					retryAt, retries = nil, 0
 					p.log.Debugf("created new output device")
 				}
 
@@ -447,8 +459,56 @@ loop:
 
 			p.log.Tracef("cleared closed output device")
 
+			// A device that failed is asked for again before anybody is told
+			// the music stopped: most of these come back, and the alternative
+			// is silence that only a restart ends.
+			if failed && retries < len(outputRetries) {
+				delay := outputRetries[retries]
+				retries++
+				p.log.Warnf("reopening the output device in %s (attempt %d of %d)",
+					delay, retries, len(outputRetries))
+				retryAt = time.After(delay)
+				break
+			}
+
 			// FIXME: this is called even if not needed, like when autoplay starts
 			p.ev <- Event{Type: EventTypeStop, Failed: failed}
+
+		case <-retryAt:
+			retryAt = nil
+
+			newOut, err := p.newOutput(source, volume, device)
+			if err == nil {
+				if paused {
+					err = newOut.Pause()
+				} else {
+					err = newOut.Resume()
+				}
+			}
+			if err != nil {
+				if newOut != nil {
+					_ = newOut.Close()
+				}
+				if retries < len(outputRetries) {
+					delay := outputRetries[retries]
+					retries++
+					p.log.WithError(err).Warnf("could not reopen the output device; trying again in %s (attempt %d of %d)",
+						delay, retries, len(outputRetries))
+					retryAt = time.After(delay)
+					break
+				}
+
+				// Out of tries. Now the music has stopped, and saying so is
+				// the last useful thing left to do about it.
+				p.log.WithError(err).Errorf("giving up on the output device after %d attempts", retries)
+				p.ev <- Event{Type: EventTypeStop, Failed: true}
+				break
+			}
+
+			out = newOut
+			outErr = out.Error()
+			retries = 0
+			p.log.Infof("reopened the output device on %q", device)
 		case <-source.Done():
 			p.ev <- Event{Type: EventTypeNotPlaying}
 		}
@@ -463,6 +523,12 @@ loop:
 		out = nil
 	}
 }
+
+// outputRetries is how long to wait before each attempt at reopening a failed
+// output, and how many there are. They cover the few seconds a device takes to
+// come back after a machine wakes or a sound card is switched, and no longer:
+// past that the silence is not going to be fixed by asking again.
+var outputRetries = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second}
 
 func (p *Player) HasBeenPlayingFor() time.Duration {
 	if p.startedPlaying.IsZero() {
