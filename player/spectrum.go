@@ -26,6 +26,11 @@ type Spectrum struct {
 	// whatever the material. Measured against a live stream, a mix that sounded
 	// full used barely a third of the range at a fixed floor.
 	envelope float32
+
+	// peaks is the same thing per band: what this part of the range has reached
+	// lately, so a cymbal is measured against other cymbals rather than against
+	// the kick drum.
+	peaks []float32
 }
 
 const (
@@ -55,6 +60,19 @@ const (
 	// reaches the top and what is quiet is near the floor.
 	spectrumRangeDb = 40
 
+	// spectrumTopRangeDb is the same thing at the top of the range, where it is
+	// narrower, because the music is.
+	//
+	// A kick drum is silence and then a hit, thirty decibels apart. A hi-hat is
+	// noise: it rings, it overlaps itself, and between its loudest and its
+	// quietest there are ten decibels or so. On a scale wide enough for the kick
+	// that is a quarter of the height, which is a band that technically moves and
+	// visibly does not. Narrowing the scale with the material is what gives the
+	// top of the spectrum the same travel as the bottom, and the numbers here
+	// were chosen by replaying recorded band levels through this arithmetic
+	// rather than by rebuilding and squinting.
+	spectrumTopRangeDb = 22
+
 	// The envelope follows the loudest band, in decibels now rather than in
 	// display units: it rises at once and falls slowly, so a quiet passage opens
 	// up rather than flattening and a loud one does not clip.
@@ -71,23 +89,60 @@ const (
 	// spectrumContrast spreads the bands apart. Above one it pushes the middle
 	// down and leaves the peaks where they are, which is what makes a hit read
 	// as a hit rather than as a rise.
-	spectrumContrast = 1.25
+	spectrumContrast = 1.5
 
 	// Attack fast, release slow: what makes a meter feel like an instrument
 	// rather than a graph.
 	spectrumAttack  = 0.9
 	spectrumRelease = 0.28
 
-	// The ends of the range are lifted, because music is not flat and a meter
-	// that reports the truth about it looks broken: a mix has most of its energy
-	// in the middle, so an honest spectrum is a hill with the kick and the
-	// cymbals as foothills. Both ends are raised until what the ear picks out —
-	// the beat underneath and the hats on top — is what the eye picks out too.
-	// The tilt is fixed and cosmetic, and it is the only cosmetic thing here.
-	spectrumLowLiftDb  = 11
-	spectrumLowBands   = 6
-	spectrumHighLiftDb = 14
-	spectrumHighFrom   = 17
+	// The range is tilted upwards, because music is not flat and a meter that
+	// reports the truth about it looks broken: a mix has most of its energy at
+	// the bottom, so an honest spectrum is a slope with the cymbals as a rounding
+	// error.
+	//
+	// Analysers answer this with a slope rather than with a shelf. Pink noise —
+	// equal energy in every octave, and what a balanced mix is measured against —
+	// falls at three decibels per octave, so a display tilted by the same amount
+	// draws it flat; mastering analysers offer between three and four and a half
+	// of them, the steeper end for how much low end a modern production carries.
+	// Three won here on recorded material: the steeper tilts put the top of the
+	// range up against the ceiling, where a band cannot show a hit because it is
+	// already at the top. A shelf, which is what this used to be, does the same
+	// job to the whole top of the range at once, and a step in the tilt reads as
+	// a wall on screen.
+	spectrumSlopeDb     = 3.0
+	spectrumSlopeFromHz = 160
+
+	// The bottom keeps a lift of its own. The slope leaves it alone by
+	// construction, and the lowest bands still need it: what is felt in a kick is
+	// below where a small speaker even starts.
+	spectrumLowLiftDb = 8
+	spectrumLowBands  = 5
+
+	// How much of a band's scale comes from its own recent peak rather than from
+	// the loudest band in the mix, at the bottom of the range and at the top.
+	//
+	// One envelope for the whole spectrum is set by the kick, and beside a kick a
+	// hi-hat is nothing: the top of the range then sits wherever the tilt put it
+	// and barely moves, which is a wall rather than a meter. Giving a band a
+	// share of its own headroom is what makes a cymbal read as loud for a cymbal.
+	//
+	// The share grows with frequency because that is where the problem is. The
+	// bottom of a mix is what the mix is measured by and can be shown against the
+	// whole of it; by the top the difference between one cymbal and another is
+	// the only difference there is, and a band that keeps a quarter of its scale
+	// tied to a kick drum thirty decibels away has thrown away a quarter of its
+	// height before it starts.
+	spectrumBandShareLow  = 0.4
+	spectrumBandShareHigh = 0.85
+
+	// The per-band peak falls slower than the overall one — a band that has gone
+	// quiet should sink rather than quietly turn its own gain up — and it is not
+	// allowed to fall far below the mix, so a band with nothing in it amplifies
+	// nothing.
+	spectrumBandFallDb  = 0.3
+	spectrumBandFloorDb = 28
 )
 
 func newSpectrum(sampleRate int) *Spectrum {
@@ -95,6 +150,7 @@ func newSpectrum(sampleRate int) *Spectrum {
 		buf:   make([]float64, spectrumSize),
 		win:   make([]float64, spectrumSize),
 		bands: make([]float32, SpectrumBands),
+		peaks: make([]float32, SpectrumBands),
 		edges: make([]int, SpectrumBands+1),
 	}
 
@@ -103,6 +159,8 @@ func newSpectrum(sampleRate int) *Spectrum {
 	for i := range s.win {
 		s.win[i] = 0.5 - 0.5*math.Cos(2*math.Pi*float64(i)/float64(spectrumSize-1))
 	}
+
+	s.rest()
 
 	// Bands spaced by octave, not by hertz: an octave is what the ear hears as
 	// an equal step, and a linear axis would crowd the whole of music into the
@@ -178,9 +236,20 @@ func (s *Spectrum) analyse() {
 	}
 	s.envelope = float32(max(max(top, float64(s.envelope)-spectrumEnvFallDb), spectrumEnvFloorDb))
 
-	floor := float64(s.envelope) - spectrumRangeDb
 	for b := range s.bands {
-		level := (loudest[b] - floor) / spectrumRangeDb
+		// Where the top of this band's scale sits: partly the loudest thing in
+		// the mix, partly the loudest this band itself has been. The first keeps
+		// the picture honest about which part of the range carries the music, the
+		// second is what lets the quiet parts of it move at all.
+		peak := max(loudest[b], float64(s.peaks[b])-spectrumBandFallDb)
+		peak = max(peak, float64(s.envelope)-spectrumBandFloorDb)
+		s.peaks[b] = float32(peak)
+
+		share := spectrumShareAt(b)
+		ref := (1-share)*float64(s.envelope) + share*peak
+
+		span := spectrumRangeAt(b)
+		level := (loudest[b] - (ref - span)) / span
 		level = min(max(level, 0), 1)
 		level = math.Pow(level, spectrumContrast) * spectrumHeadroom
 
@@ -192,18 +261,48 @@ func (s *Spectrum) analyse() {
 	}
 }
 
-// spectrumTiltDb lifts the ends of the range. See the constants: it is what
-// makes the beat and the cymbals read on a screen, and it is deliberately not
-// the truth about the signal.
+// spectrumTiltDb is the display slope: how much a band is lifted for where it
+// sits in the range. See the constants — it is deliberately not the truth about
+// the signal, it is what makes a mix read as level rather than as a ramp.
 func spectrumTiltDb(band int) float64 {
+	tilt := 0.0
+	if hz := spectrumBandHz(band); hz > spectrumSlopeFromHz {
+		tilt = spectrumSlopeDb * math.Log2(hz/spectrumSlopeFromHz)
+	}
 	if band < spectrumLowBands {
-		return spectrumLowLiftDb * float64(spectrumLowBands-band) / spectrumLowBands
+		tilt += spectrumLowLiftDb * float64(spectrumLowBands-band) / spectrumLowBands
 	}
-	if band >= spectrumHighFrom {
-		span := float64(SpectrumBands - spectrumHighFrom)
-		return spectrumHighLiftDb * float64(band-spectrumHighFrom+1) / span
+	return tilt
+}
+
+// spectrumShareAt is how much of a band's scale is its own, growing with
+// frequency. See the constants.
+func spectrumShareAt(band int) float64 {
+	at := float64(band) / float64(SpectrumBands-1)
+	return spectrumBandShareLow + (spectrumBandShareHigh-spectrumBandShareLow)*at
+}
+
+// spectrumRangeAt is how many decibels a band's height stands for, narrowing
+// with frequency because the music does. See spectrumTopRangeDb.
+func spectrumRangeAt(band int) float64 {
+	at := float64(band) / float64(SpectrumBands-1)
+	return spectrumRangeDb + (spectrumTopRangeDb-spectrumRangeDb)*at
+}
+
+// spectrumBandHz is the middle of a band, which is where its tilt is taken.
+func spectrumBandHz(band int) float64 {
+	step := (float64(band) + 0.5) / float64(SpectrumBands)
+	return spectrumLowHz * math.Pow(spectrumHighHz/spectrumLowHz, step)
+}
+
+// rest puts every band's peak at the quietest the display goes, so the first
+// seconds of a track are measured rather than spent falling from silence.
+// Callers must hold s.mu, or hold the spectrum alone.
+func (s *Spectrum) rest() {
+	for i := range s.peaks {
+		s.peaks[i] = spectrumEnvFloorDb
 	}
-	return 0
+	s.envelope = spectrumEnvFloorDb
 }
 
 // Bands is the current spectrum, lowest frequency first, each 0..1.
@@ -223,6 +322,7 @@ func (s *Spectrum) Reset() {
 
 	s.fill = 0
 	clear(s.bands)
+	s.rest()
 }
 
 // fft transforms in place, radix-2 Cooley-Tukey. The standard library has no
