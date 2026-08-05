@@ -435,7 +435,8 @@ loop:
 				panic("unknown player command")
 			}
 		case err := <-outErr:
-			if err != nil {
+			failed := err != nil
+			if failed {
 				p.log.WithError(err).Errorf("output device failed")
 			}
 
@@ -447,7 +448,7 @@ loop:
 			p.log.Tracef("cleared closed output device")
 
 			// FIXME: this is called even if not needed, like when autoplay starts
-			p.ev <- Event{Type: EventTypeStop}
+			p.ev <- Event{Type: EventTypeStop, Failed: failed}
 		case <-source.Done():
 			p.ev <- Event{Type: EventTypeNotPlaying}
 		}

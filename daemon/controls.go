@@ -225,6 +225,18 @@ func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
 			p.emitMprisUpdate(mpris.Stopped)
 		}
 	case player.EventTypeStop:
+		// An output that gave up takes the music with it, and the state has to
+		// say so. Left alone it goes on reporting that it is playing: the
+		// screen shows a playhead crossing a track nobody can hear, the
+		// position runs on for as long as the device is left alone, and what
+		// it resumes at the next morning is a place the track never had.
+		if ev.Failed {
+			p.state.player.IsPlaying = false
+			p.state.player.IsBuffering = false
+			p.state.setPaused(true)
+			p.updateState(ctx)
+		}
+
 		p.app.server.Emit(&ApiEvent{
 			Type: ApiEventTypeStopped,
 			Data: ApiEventDataStopped{

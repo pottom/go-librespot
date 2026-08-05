@@ -19,6 +19,13 @@ const (
 
 type Event struct {
 	Type EventType
+
+	// Failed marks a stop that nobody asked for: the output device gave up
+	// rather than being closed. The two look the same from here and are not
+	// the same at all — one is a track ending or a command being obeyed, the
+	// other is the music stopping while everything above still believes it is
+	// playing.
+	Failed bool
 }
 
 type EventManager interface {
