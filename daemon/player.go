@@ -75,6 +75,14 @@ type AppPlayer struct {
 
 	prefetchTimer *time.Timer
 
+	// awake is when this device joined, and quiet says it has not yet been
+	// asked for anything. Together they answer the one question a transfer
+	// cannot: whether somebody wanted this, or whether Spotify is simply
+	// handing back a session that was open when the device last vanished. See
+	// the transfer handler.
+	awake time.Time
+	quiet bool
+
 	// consecutiveUnplayableSkips bounds how many unplayable tracks in a row advanceNext will
 	// skip past (Spotify-refused audio keys / restricted media) before giving up — so a run
 	// of refused tracks (even at the very start of a context) advances to the first playable
@@ -232,6 +240,21 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		// options
 		p.state.player.Options = transferState.Options
 		pause := transferState.Playback.IsPaused && req.Command.Options.RestorePaused != "resume"
+
+		// A device that has only just appeared does not start making noise on
+		// its own. Spotify hands the session straight back to a device that
+		// reconnects, so a daemon started in the morning would begin playing
+		// whatever was on when the machine was shut down — nobody asked for
+		// that, and a player that does it is a player that gets uninstalled.
+		//
+		// Only at the very beginning, and only until something is asked of it:
+		// a transfer from a phone a minute later is somebody reaching for this
+		// device on purpose, and that one plays.
+		if p.quiet && time.Since(p.awake) < startupQuiet {
+			p.app.log.Info("starting up paused rather than resuming what was left playing")
+			pause = true
+		}
+		p.quiet = false
 		// playback
 		// Note: this sets playback speed to 0 or 1 because that's all we're
 		// capable of, depending on whether the playback is paused or not.
@@ -414,6 +437,10 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		return fmt.Errorf("unsupported player command: %s", req.Command.Endpoint)
 	}
 }
+
+// startupQuiet is how long after joining a transfer is taken to be Spotify
+// handing a session back rather than somebody choosing this device.
+const startupQuiet = 30 * time.Second
 
 func (p *AppPlayer) handleDealerRequest(ctx context.Context, req dealer.Request) error {
 	// Limit ourselves to 30 seconds for handling dealer requests

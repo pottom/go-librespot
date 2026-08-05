@@ -225,6 +225,8 @@ func (app *App) newAppPlayer(ctx context.Context, creds any) (_ *AppPlayer, err 
 		countryCode:     new(string),
 		volumeUpdate:    make(chan float32, 1),
 		playbackReadyCh: make(chan struct{}),
+		awake:           time.Now(),
+		quiet:           true,
 	}
 
 	appPlayer.prefetchTimer = time.NewTimer(math.MaxInt64)

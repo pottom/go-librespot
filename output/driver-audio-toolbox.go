@@ -139,6 +139,14 @@ func (out *toolboxOutput) bufferSamples(buffer C.AudioQueueBufferRef) {
 	buffer.mAudioDataByteSize = C.UInt32(n * 4)
 
 	status := C.AudioQueueEnqueueBuffer(out.audioQueue, buffer, 0, nil)
+	// A buffer offered while the queue is being reset is what every pause and
+	// every track change looks like from in here: the callback is already in
+	// flight when the reset begins. It is not a failure, and logging it as one
+	// filled the log with red herrings — two hundred of them in a day — under
+	// which the one real failure was hard to find.
+	if status == C.kAudioQueueErr_EnqueueDuringReset {
+		return
+	}
 	if status != C.noErr {
 		log.Errorf("error queuing samples for output: %v", status)
 	}
