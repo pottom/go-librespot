@@ -63,30 +63,51 @@ func (s *State) reset() {
 	}
 }
 
+// maxReasonableElapsed is the longest gap between two updates that can still be
+// playback rather than a device left alone. Beyond it the timestamp is stale —
+// a previous session, a sleeping machine, or an output that died while the
+// state went on saying it was playing — and the time that passed is not time
+// the track advanced by.
+const maxReasonableElapsed = 10 * 60 * 1000 // ten minutes, in milliseconds
+
 func (s *State) trackPosition() int64 {
 	// If paused or not actually playing, use raw position value
 	if s.player.IsPaused || !s.player.IsPlaying {
-		return s.player.PositionAsOfTimestamp
+		return s.clampedPosition(s.player.PositionAsOfTimestamp)
 	}
 
 	// Calculate dynamic position only if playback is actually active
 	now := time.Now().UnixMilli()
 	elapsed := now - s.player.Timestamp
 
-	// Validate timestamp freshness: if elapsed time exceeds 10 minutes (600000ms),
-	// timestamp is likely stale (e.g., from a previous session), use raw position
-	const maxReasonableElapsed = 10 * 60 * 1000 // 10 minutes in milliseconds
 	if elapsed > maxReasonableElapsed || elapsed < 0 {
-		return s.player.PositionAsOfTimestamp
+		return s.clampedPosition(s.player.PositionAsOfTimestamp)
 	}
 
 	calculated := s.player.PositionAsOfTimestamp + elapsed
 	// Ensure position is non-negative (shouldn't happen, but defensive)
 	if calculated < 0 {
-		return s.player.PositionAsOfTimestamp
+		return s.clampedPosition(s.player.PositionAsOfTimestamp)
 	}
 
-	return calculated
+	return s.clampedPosition(calculated)
+}
+
+// clampedPosition keeps a position inside the track it belongs to.
+//
+// A position past the end is not a position: loading a stream there reads no
+// samples at all, the output fails on the empty read, and the device sits there
+// looking like it has frozen. That is exactly what an inflated timestamp
+// produced — a track of three minutes resumed seven hours in — so nothing that
+// asks where playback is gets an answer outside the track.
+func (s *State) clampedPosition(position int64) int64 {
+	if position < 0 {
+		return 0
+	}
+	if d := s.player.Duration; d > 0 && position > d {
+		return 0
+	}
+	return position
 }
 
 // Update timestamp, and updating the player position timestamp according to how
@@ -98,6 +119,14 @@ func (s *State) updateTimestamp() {
 	// How many milliseconds the playback has advanced since the last update to
 	// PositionAsOfTimestamp.
 	advancedTimeMillis := now.UnixMilli() - s.player.Timestamp
+
+	// A gap too long to be playback is a device that was left alone: asleep,
+	// or with an output that died while the state went on saying it played.
+	// The clock moved; the track did not. Advancing by it is what turned a
+	// three-minute track into a position seven hours in.
+	if advancedTimeMillis > maxReasonableElapsed || advancedTimeMillis < 0 {
+		advancedTimeMillis = 0
+	}
 
 	// How far the playback position has advanced during that time.
 	// (For example, PlaybackSpeed is 0 when paused so the position doesn't

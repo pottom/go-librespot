@@ -395,6 +395,11 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	p.app.log.WithField("uri", spotId.Uri()).
 		Debugf("loading %s (paused: %t, position: %dms)", spotId.Type(), paused, trackPosition)
 
+	// The state's own idea of the position is not trusted past this point: a
+	// stream created beyond the end of its track reads nothing, and the output
+	// dies on the empty read rather than the track starting over.
+	p.state.player.PositionAsOfTimestamp = trackPosition
+
 	p.state.updateTimestamp()
 	p.state.player.IsPlaying = true
 	p.state.player.IsBuffering = true
