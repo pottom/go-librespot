@@ -326,8 +326,17 @@ func (p *AppPlayer) loadCurrentTrackOrSkip(ctx context.Context, paused, drop boo
 	if err == nil {
 		return nil
 	}
+
 	var keyErr *audio.KeyProviderError
 	if errors.As(err, &keyErr) && keyErr.Code == keyRefusedForNow && p.scheduleKeyRetry(err) {
+		return nil
+	}
+
+	// A key that never came is the same case as a key refused for now: the
+	// service was reached and said nothing in time, usually because the
+	// connection to it had just been rebuilt. Asking again is what works;
+	// skipping asks the same broken thing about a different track.
+	if errors.Is(err, context.DeadlineExceeded) && p.scheduleKeyRetry(err) {
 		return nil
 	}
 	if errors.Is(err, librespot.ErrMediaRestricted) || errors.Is(err, librespot.ErrNoSupportedFormats) || errors.As(err, &keyErr) {
@@ -338,6 +347,26 @@ func (p *AppPlayer) loadCurrentTrackOrSkip(ctx context.Context, paused, drop boo
 		return nil
 	}
 	return err
+}
+
+// settleAfterFailedLoad puts the state back to a stop after a load that did not
+// happen. Nothing is playing and nothing is on its way, and both have to be
+// said out loud: the screen reads this state, and so does every command that
+// asks what to do next.
+func (p *AppPlayer) settleAfterFailedLoad() {
+	p.state.player.IsBuffering = false
+	p.state.player.IsPlaying = false
+	p.state.player.PlaybackSpeed = 0
+	p.state.setPaused(true)
+	p.updateState(context.Background())
+
+	p.app.server.Emit(&ApiEvent{
+		Type: ApiEventTypeStopped,
+		Data: ApiEventDataStopped{
+			PlayOrigin: p.state.playOrigin(),
+		},
+	})
+	p.emitMprisUpdate(mpris.Stopped)
 }
 
 // scheduleKeyRetry arranges for the current track to be asked for again, and
@@ -363,7 +392,18 @@ func (p *AppPlayer) scheduleKeyRetry(err error) bool {
 	return true
 }
 
-func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) error {
+func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) (err error) {
+	// Whatever goes wrong below, the state must stop saying it is about to
+	// play. Loading sets it buffering before it can fail, and a device that
+	// says it is buffering and never stops is a device that has frozen — which
+	// is what it looks like from the outside, however alive the daemon is and
+	// however well it goes on taking commands.
+	defer func() {
+		if err != nil {
+			p.settleAfterFailedLoad()
+		}
+	}()
+
 	// The outgoing track's tempo is worth keeping before it is forgotten: it is
 	// the only chance to record it, and it is what lets the queue show a tempo
 	// for something not currently playing.
