@@ -247,8 +247,26 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		// playback
 		// Note: this sets playback speed to 0 or 1 because that's all we're
 		// capable of, depending on whether the playback is paused or not.
-		p.state.player.Timestamp = transferState.Playback.Timestamp
-		p.state.player.PositionAsOfTimestamp = int64(transferState.Playback.PositionAsOfTimestamp)
+		// The position arrives with the timestamp it was true at — another
+		// device's clock, at the moment it last said anything. While a session
+		// is genuinely being handed over that is a second or two in the air and
+		// worth adding; when the session has been sitting dead since a player
+		// quit, it is minutes, and adding them resumes a track long past where
+		// anybody left it.
+		//
+		// Measured: quitting mid-track and picking the device again a minute
+		// later loaded the stream at zero — Spotify had no session left to
+		// name a position from — and then reported one minute three, because
+		// the stale timestamp went on being counted from. The screen showed a
+		// playhead a minute into a track that had just started.
+		position := int64(transferState.Playback.PositionAsOfTimestamp)
+		if !transferState.Playback.IsPaused {
+			if elapsed := time.Since(time.UnixMilli(transferState.Playback.Timestamp)); elapsed > 0 && elapsed < handoverSlack {
+				position += elapsed.Milliseconds()
+			}
+		}
+		p.state.player.Timestamp = time.Now().UnixMilli()
+		p.state.player.PositionAsOfTimestamp = position
 		p.state.setPaused(pause)
 
 		// current session
@@ -426,6 +444,11 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		return fmt.Errorf("unsupported player command: %s", req.Command.Endpoint)
 	}
 }
+
+// handoverSlack is how much of the time since a transfer's timestamp counts as
+// playback. A hand-over in flight is a second or two; anything longer is a
+// session nobody has been listening to.
+const handoverSlack = 15 * time.Second
 
 func (p *AppPlayer) handleDealerRequest(ctx context.Context, req dealer.Request) error {
 	// Limit ourselves to 30 seconds for handling dealer requests
