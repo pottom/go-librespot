@@ -87,7 +87,8 @@ func (p *AppPlayer) lyricsFor(ctx context.Context, trackId string) (*ApiResponse
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
+		// Spotify has nothing for this track. Somebody else may.
+		return p.lyricsFromLRCLIB(ctx, trackId), nil
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("invalid status code from lyrics: %d", resp.StatusCode)
@@ -113,6 +114,15 @@ func (p *AppPlayer) lyricsFor(ctx context.Context, trackId string) (*ApiResponse
 		var at int64
 		_, _ = fmt.Sscanf(line.StartTimeMs, "%d", &at)
 		out.Lines = append(out.Lines, ApiResponseLyric{At: at, Words: line.Words})
+	}
+
+	// Words with no timings are worth showing and cannot be followed. Where
+	// somebody else has timed the same track, theirs are the better answer;
+	// where they have not, Spotify's stand.
+	if !out.Synced || len(out.Lines) == 0 {
+		if better := p.lyricsFromLRCLIB(ctx, trackId); better != nil && (better.Synced || len(out.Lines) == 0) {
+			return better, nil
+		}
 	}
 	return out, nil
 }
