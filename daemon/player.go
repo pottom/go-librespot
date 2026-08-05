@@ -440,7 +440,13 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 
 // startupQuiet is how long after joining a transfer is taken to be Spotify
 // handing a session back rather than somebody choosing this device.
-const startupQuiet = 30 * time.Second
+//
+// Short, because the two are told apart by nothing but the clock: the hand-back
+// arrives as the dealer connects, within a second or so, while choosing this
+// device from a list takes a person longer than that. Anything picked by hand
+// inside the window plays a press later — the interface asks for it again once
+// the transfer has landed, which is the other half of this.
+const startupQuiet = 5 * time.Second
 
 func (p *AppPlayer) handleDealerRequest(ctx context.Context, req dealer.Request) error {
 	// Limit ourselves to 30 seconds for handling dealer requests
