@@ -486,6 +486,26 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) (er
 		}
 	}
 
+	// Only now is the track's own length known, and only now can a position be
+	// told from a position past the end. It arrives that way often enough to
+	// matter: a controller hands over a session it has been counting for hours,
+	// or a device wakes up with a clock that ran on while the music did not.
+	// The stream is then sitting past the last sample, the output reads nothing
+	// at all, and the device that has just been handed the music goes silent —
+	// which is what a listener calls frozen. Whatever the source of the number,
+	// a track that cannot resume where it was asked to starts from the top.
+	if duration := int64(p.primaryStream.Media.Duration()); duration > 0 && trackPosition >= duration {
+		p.app.log.WithField("uri", spotId.Uri()).
+			Warnf("asked to resume at %dms of a %dms track; starting it over", trackPosition, duration)
+
+		if err := p.primaryStream.Source.SetPositionMs(0); err != nil {
+			return fmt.Errorf("failed restarting stream for %s: %w", spotId, err)
+		}
+		trackPosition = 0
+		p.state.player.Timestamp = time.Now().UnixMilli()
+		p.state.player.PositionAsOfTimestamp = 0
+	}
+
 	if err := p.player.SetPrimaryStream(p.primaryStream.Source, paused, drop); err != nil {
 		return fmt.Errorf("failed setting stream for %s: %w", spotId, err)
 	}
