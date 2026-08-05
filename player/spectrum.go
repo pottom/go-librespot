@@ -43,31 +43,51 @@ const (
 	spectrumLowHz  = 40
 	spectrumHighHz = 16000
 
-	// spectrumFloorDb is what counts as silence. Energy is spread over orders
-	// of magnitude, so the scale is in decibels or the bass is all anyone sees.
-	spectrumFloorDb = -70
+	// spectrumRangeDb is how much of the music's dynamic range the height
+	// stands for, measured down from the loudest band.
+	//
+	// This is the number that decides whether a meter moves. Mapping a fixed
+	// seventy decibels onto the height put every band that was audible at all
+	// into the top half and left the difference between a kick and the room it
+	// was played in worth two or three cells: measured against Better Off Alone,
+	// which is nothing but kick and hats, the lowest band never passed a quarter
+	// of its bar. Forty decibels is roughly the range of a mix, so what is loud
+	// reaches the top and what is quiet is near the floor.
+	spectrumRangeDb = 40
 
-	// The envelope rises at once and falls slowly, so a quiet passage opens up
-	// rather than flattening and a loud one does not clip.
-	spectrumEnvRelease = 0.995
+	// The envelope follows the loudest band, in decibels now rather than in
+	// display units: it rises at once and falls slowly, so a quiet passage opens
+	// up rather than flattening and a loud one does not clip.
+	spectrumEnvFallDb = 0.6
 
-	// spectrumEnvFloor stops the gain running away in silence, where the only
+	// spectrumEnvFloorDb stops the gain running away in silence, where the only
 	// thing left to amplify is the noise.
-	spectrumEnvFloor = 0.08
+	spectrumEnvFloorDb = -55
 
 	// spectrumHeadroom is how much of the scale the loudest band takes, leaving
 	// somewhere for something louder to go.
 	spectrumHeadroom = 0.98
 
-	// spectrumContrast spreads the bands apart. Below one it lifts the quiet
-	// ones so a mix fills the height; the movement then reads as movement
-	// rather than as a nudge at the bottom of the scale.
-	spectrumContrast = 1.0
+	// spectrumContrast spreads the bands apart. Above one it pushes the middle
+	// down and leaves the peaks where they are, which is what makes a hit read
+	// as a hit rather than as a rise.
+	spectrumContrast = 1.25
 
 	// Attack fast, release slow: what makes a meter feel like an instrument
 	// rather than a graph.
-	spectrumAttack  = 0.8
-	spectrumRelease = 0.34
+	spectrumAttack  = 0.9
+	spectrumRelease = 0.28
+
+	// The ends of the range are lifted, because music is not flat and a meter
+	// that reports the truth about it looks broken: a mix has most of its energy
+	// in the middle, so an honest spectrum is a hill with the kick and the
+	// cymbals as foothills. Both ends are raised until what the ear picks out —
+	// the beat underneath and the hats on top — is what the eye picks out too.
+	// The tilt is fixed and cosmetic, and it is the only cosmetic thing here.
+	spectrumLowLiftDb  = 11
+	spectrumLowBands   = 6
+	spectrumHighLiftDb = 14
+	spectrumHighFrom   = 17
 )
 
 func newSpectrum(sampleRate int) *Spectrum {
@@ -122,6 +142,13 @@ func (s *Spectrum) analyse() {
 	}
 	fft(re, im)
 
+	// The loudest bin in a band rather than the average of them.
+	//
+	// A band near the top covers dozens of bins, and a cymbal is a few of them:
+	// averaging spreads that hit across everything it did not touch and leaves
+	// a number that barely moves. What a meter is asked is how loud this part
+	// of the range got, and the answer is the loudest thing in it.
+	loudest := make([]float64, len(s.bands))
 	for b := range s.bands {
 		lo, hi := s.edges[b], s.edges[b+1]
 		if hi <= lo {
@@ -130,19 +157,32 @@ func (s *Spectrum) analyse() {
 
 		var power float64
 		for i := lo; i < hi && i < len(re)/2; i++ {
-			power += re[i]*re[i] + im[i]*im[i]
+			power = max(power, re[i]*re[i]+im[i]*im[i])
 		}
-		power /= float64(hi - lo)
 
 		// Normalised by the window: the transform is unscaled, so without this
 		// a bin's magnitude grows with the analysis size and every band pins
 		// to the top of the scale whatever is playing.
 		power /= float64(spectrumSize) * float64(spectrumSize)
 
-		// Decibels against the floor, then folded onto 0..1.
-		db := 10 * math.Log10(power+1e-12)
-		level := (db - spectrumFloorDb) / -spectrumFloorDb
+		loudest[b] = 10*math.Log10(power+1e-12) + spectrumTiltDb(b)
+	}
+
+	// The envelope is where the top of the scale sits, and it is in decibels:
+	// dividing display units by each other, which is what this used to do,
+	// compares two numbers that have already been squeezed onto a height and
+	// leaves everything bunched together near the top.
+	top := loudest[0]
+	for _, db := range loudest {
+		top = max(top, db)
+	}
+	s.envelope = float32(max(max(top, float64(s.envelope)-spectrumEnvFallDb), spectrumEnvFloorDb))
+
+	floor := float64(s.envelope) - spectrumRangeDb
+	for b := range s.bands {
+		level := (loudest[b] - floor) / spectrumRangeDb
 		level = min(max(level, 0), 1)
+		level = math.Pow(level, spectrumContrast) * spectrumHeadroom
 
 		rate := spectrumRelease
 		if float32(level) > s.bands[b] {
@@ -150,22 +190,20 @@ func (s *Spectrum) analyse() {
 		}
 		s.bands[b] += (float32(level) - s.bands[b]) * float32(rate)
 	}
+}
 
-	// Scaled to the loudest band lately, so the bars use the height they have.
-	var peak float32
-	for _, v := range s.bands {
-		peak = max(peak, v)
+// spectrumTiltDb lifts the ends of the range. See the constants: it is what
+// makes the beat and the cymbals read on a screen, and it is deliberately not
+// the truth about the signal.
+func spectrumTiltDb(band int) float64 {
+	if band < spectrumLowBands {
+		return spectrumLowLiftDb * float64(spectrumLowBands-band) / spectrumLowBands
 	}
-	s.envelope = max(max(peak, s.envelope*spectrumEnvRelease), spectrumEnvFloor)
-	for b := range s.bands {
-		v := min(s.bands[b]/s.envelope, 1)
-
-		// Stretched once the level is relative to the loudest band, not before.
-		// Applied to the raw decibels it flattened both ends of the scale — and
-		// most of a spectrum lives at the quiet end, so the bars stopped moving
-		// almost entirely.
-		s.bands[b] = float32(math.Pow(float64(v), spectrumContrast)) * spectrumHeadroom
+	if band >= spectrumHighFrom {
+		span := float64(SpectrumBands - spectrumHighFrom)
+		return spectrumHighLiftDb * float64(band-spectrumHighFrom+1) / span
 	}
+	return 0
 }
 
 // Bands is the current spectrum, lowest frequency first, each 0..1.
