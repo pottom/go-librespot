@@ -630,7 +630,12 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 		}
 		return p.lyricsFor(ctx, id.Base62())
 	case ApiRequestTypeSpectrum:
-		return &ApiResponseSpectrum{Bands: p.player.Spectrum()}, nil
+		out := &ApiResponseSpectrum{Bands: p.player.Spectrum()}
+		if period, since, _ := p.player.Beat(); period > 0 {
+			out.Beat = float64(period) / float64(time.Millisecond)
+			out.Since = float64(since) / float64(time.Millisecond)
+		}
+		return out, nil
 	case ApiRequestTypeWaveform:
 		return &ApiResponseWaveform{Samples: p.player.Waveform()}, nil
 	case ApiRequestTypeResume:

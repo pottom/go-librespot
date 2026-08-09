@@ -380,6 +380,20 @@ type ApiResponseQueueTrack struct {
 // there.
 type ApiResponseSpectrum struct {
 	Bands []float32 `json:"bands"`
+
+	// Beat is how far apart the beats of what is playing are, in milliseconds,
+	// and Since how long ago the last one was heard. Nought when the analyser
+	// has not found a beat, which is the honest answer for a recording that has
+	// none.
+	//
+	// It rides along with the spectrum because whatever is drawing to the beat
+	// is already asking for this thirty times a second, and a second request on
+	// its own schedule would arrive a frame out from the one it belongs to.
+	//
+	// Since may be negative: the analyser reads the samples on their way to the
+	// audio device, so the beat it has just found may not have been heard yet.
+	Beat  float64 `json:"beat_ms"`
+	Since float64 `json:"beat_since_ms"`
 }
 
 type ApiResponseWaveform struct {

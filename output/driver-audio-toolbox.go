@@ -47,7 +47,10 @@ func newAudioToolboxOutput(opts *NewOutputOptions) (*toolboxOutput, error) {
 		channels:   opts.ChannelCount,
 		sampleRate: opts.SampleRate,
 		reader:     opts.Reader,
-		bufferSize: 2048,
+		// Frames times channels: the queue is handed interleaved samples. Named
+		// beside the count of buffers in the player, which is where the beat
+		// analysis reads how far ahead of the ear it is. See Player.Beat.
+		bufferSize: 1024 * 2,
 		volume:     opts.InitialVolume,
 		err:        make(chan error, 1),
 	}

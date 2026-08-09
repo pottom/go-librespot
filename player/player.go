@@ -29,6 +29,13 @@ import (
 const (
 	SampleRate = 44100
 	Channels   = 2
+
+	// What the output holds before anything is heard: the buffers waiting their
+	// turn, and how many frames are in each. The drivers allocate these; they
+	// are named here because the analysis has to know how far ahead of the ear
+	// it is running. See Player.Beat.
+	outputBuffers      = 3
+	outputBufferFrames = 1024
 )
 
 const MaxStateVolume = 65535
