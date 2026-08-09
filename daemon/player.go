@@ -212,6 +212,25 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		}
 		p.state.lastTransferTimestamp = transferState.Playback.Timestamp
 
+		// Moved here from nothing at all: the account has no context, because
+		// nothing was playing anywhere. Becoming the device is still the thing
+		// that was asked for — a speaker you switch to while the room is quiet
+		// is a speaker you have switched to. Asking the resolver what an empty
+		// context holds gets a 404, which failed the whole command and left the
+		// caller with a server error and no way to tell why.
+		if transferState.CurrentSession.GetContext().GetUri() == "" {
+			p.app.log.Infof("becoming the active device with nothing to play")
+
+			p.state.setActive(true)
+			p.state.player.IsPlaying = false
+			p.state.player.IsBuffering = false
+			p.state.player.IsPaused = false
+
+			p.app.server.Emit(&ApiEvent{Type: ApiEventTypeActive})
+			p.updateState(ctx)
+			return nil
+		}
+
 		ctxTracks, err := tracks.NewTrackListFromContext(ctx, p.app.log, p.sess.Spclient(), transferState.CurrentSession.Context)
 		if err != nil {
 			return fmt.Errorf("failed creating track list: %w", err)
