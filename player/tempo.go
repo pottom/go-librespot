@@ -3,6 +3,7 @@ package player
 import (
 	"math"
 	"sync"
+	"time"
 )
 
 // Tempo estimates the beat rate of what is playing, from the samples on their
@@ -28,12 +29,24 @@ type Tempo struct {
 	env  []float32 // onset strength, oldest first
 	at   int       // write position in the ring
 
-	filled   int
-	sinceRun int
+	filled     int
+	sinceRun   int
+	sincePlace int
 
 	bpm        float64
 	confidence float64
 	agreed     int
+
+	// hops is how many envelope values have gone by since the analyser started,
+	// and beat where the last beat fell on that count — a fractional position,
+	// because a beat does not land on a whole envelope value any more than a
+	// tempo is a whole number.
+	//
+	// The period alone says how often; this says when, which is the difference
+	// between a picture that reacts to the music and one that plays with it.
+	hops   float64
+	beat   float64
+	period float64
 }
 
 const (
@@ -75,6 +88,14 @@ const (
 	// to stand to count as certain.
 	tempoSharpness = 5.0
 
+	// phaseWindow is how much of the envelope the beats are placed against, in
+	// values: about four seconds. See phaseAt.
+	phaseWindow = 344
+
+	// phaseEvery is how often they are placed again, in values: about a third
+	// of a second.
+	phaseEvery = 32
+
 	// tempoFloor is the confidence below which nothing is reported: a tempo
 	// invented for a recording that has none is worse than a blank.
 	//
@@ -111,6 +132,7 @@ func (t *Tempo) feed(samples []float32, channels int) {
 
 		t.env[t.at] = float32(max(rise, 0))
 		t.at = (t.at + 1) % len(t.env)
+		t.hops++
 		if t.filled < len(t.env) {
 			t.filled++
 		}
@@ -119,6 +141,18 @@ func (t *Tempo) feed(samples []float32, channels int) {
 		if t.sinceRun >= tempoEvery && t.filled == len(t.env) {
 			t.sinceRun = 0
 			t.estimate()
+		}
+
+		// The beats are placed far oftener than the tempo is measured. Twelve
+		// seconds of envelope is what it takes to be sure how fast a record is;
+		// where the next beat falls is a question about the last few seconds,
+		// and asking it once every second and a half meant extrapolating a
+		// position across a second and a half of a period that is a fraction of
+		// a percent out. Which is a fraction of a beat late, every time.
+		t.sincePlace++
+		if t.sincePlace >= phaseEvery && t.period > 0 {
+			t.sincePlace = 0
+			t.phaseAt(t.tail(), t.period)
 		}
 	}
 }
@@ -186,6 +220,9 @@ func (t *Tempo) estimate() {
 		}
 	}
 
+	t.period = lag
+	t.phaseAt(t.tail(), lag)
+
 	bpm := rate * 60 / lag
 	if t.bpm > 0 && math.Abs(bpm-t.bpm) < 3 {
 		t.agreed++
@@ -193,6 +230,101 @@ func (t *Tempo) estimate() {
 		t.agreed = 0
 	}
 	t.bpm, t.confidence = bpm, confidence
+}
+
+// tail is the newest of the envelope, oldest first, with the mean taken out —
+// the same shape estimate works on, over the window the beats are placed
+// against. Callers must hold t.mu.
+func (t *Tempo) tail() []float64 {
+	n := min(phaseWindow, t.filled)
+	out := make([]float64, n)
+
+	var mean float64
+	for i := range out {
+		out[i] = float64(t.env[(t.at-n+i+len(t.env)*2)%len(t.env)])
+		mean += out[i]
+	}
+	if n > 0 {
+		mean /= float64(n)
+	}
+	for i := range out {
+		out[i] -= mean
+	}
+	return out
+}
+
+// phaseAt finds where the beats fall, given how far apart they are.
+//
+// The period says how often, which is half of keeping time; this is the other
+// half. A comb is laid over the envelope — one tooth every period — and slid
+// along until the teeth sit on as much onset as they can. Where they land is
+// where the beats are.
+//
+// Sub-hop, by taking the centre of mass of the onset around each tooth: at 120
+// bpm one envelope value is a fortieth of a beat, which is audible as a stumble
+// if every beat is quantised to it.
+//
+// Callers must hold t.mu.
+func (t *Tempo) phaseAt(env []float64, lag float64) {
+	if lag < 2 || int(lag) >= len(env) {
+		return
+	}
+
+	// Only the end of the window. The period is measured over twelve seconds
+	// because that is what it takes to be sure of it, and it comes back a
+	// fraction of a percent out — which is nothing for a rate and a great deal
+	// for a position, because walking a comb from one end of twelve seconds to
+	// the other multiplies that fraction by every beat it steps over. At 174
+	// bpm it came out a fifth of a beat late. Four seconds is a dozen beats to
+	// fit against and a third of the drift.
+	if from := len(env) - phaseWindow; from > 0 && float64(phaseWindow) > lag*3 {
+		env = env[from:]
+	}
+
+	best, at := math.Inf(-1), 0.0
+	for off := 0.0; off < lag; off++ {
+		var sum, weighted, weight float64
+		var teeth int
+		for x := off; x < float64(len(env)); x += lag {
+			teeth++
+			// The tooth and its neighbours, so a beat that fell between two
+			// values is not missed by the one it fell between.
+			for d := -1.0; d <= 1; d++ {
+				i := int(x + d)
+				if i < 0 || i >= len(env) || env[i] <= 0 {
+					continue
+				}
+				sum += env[i]
+				weighted += env[i] * d
+				weight += env[i]
+			}
+		}
+		if teeth == 0 {
+			continue
+		}
+
+		// Per tooth, not per comb: an offset near the start fits one more tooth
+		// into the same window than an offset near the end does, and judged on
+		// the total that extra tooth is worth more than being right. Which is
+		// how a comb laid over a steady beat came back half a period out.
+		if sum /= float64(teeth); sum > best {
+			best = sum
+			at = off
+			if weight > 0 {
+				at += weighted / weight
+			}
+		}
+	}
+
+	// The comb was laid over the envelope oldest first, so the last tooth
+	// before the end is the last beat heard. Counted against hops, which is the
+	// clock everything else reads it against.
+	last := at
+	for last+lag < float64(len(env)) {
+		last += lag
+	}
+	t.beat = t.hops - (float64(len(env)) - 1 - last)
+	t.period = lag
 }
 
 // tempoPrior is how likely a tempo is before hearing anything: a bell in
@@ -223,13 +355,43 @@ func (t *Tempo) Result() (bpm float64, confidence float64) {
 	return t.bpm, t.confidence
 }
 
+// Beat is how far apart the beats are and how long ago the last one fell, or
+// nothing while the analyser is still listening.
+//
+// The pair is what a picture needs to keep time rather than to react: the
+// period says how often to move and the offset says when, and between the two
+// anything that draws can work out where the next beat is without asking again.
+func (t *Tempo) Beat() (period, since time.Duration, confidence float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.agreed < tempoAgree || t.confidence < tempoFloor || t.period <= 0 {
+		return 0, 0, t.confidence
+	}
+
+	hop := float64(time.Second) * float64(tempoHop) / float64(SampleRate)
+	gone := t.hops - t.beat
+	period = time.Duration(t.period * hop)
+
+	// Wrapped into the period: the last beat is the last one, not the one the
+	// estimate happened to land on a second and a half ago.
+	if period > 0 {
+		gone = math.Mod(gone, t.period)
+		if gone < 0 {
+			gone += t.period
+		}
+	}
+	return period, time.Duration(gone * hop), t.confidence
+}
+
 // Reset forgets everything, for when the track changes.
 func (t *Tempo) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	t.acc, t.count, t.prev = 0, 0, 0
-	t.at, t.filled, t.sinceRun = 0, 0, 0
+	t.at, t.filled, t.sinceRun, t.sincePlace = 0, 0, 0, 0
 	t.bpm, t.confidence, t.agreed = 0, 0, 0
+	t.hops, t.beat, t.period = 0, 0, 0
 	clear(t.env)
 }
