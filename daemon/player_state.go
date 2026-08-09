@@ -104,7 +104,16 @@ func (s *State) clampedPosition(position int64) int64 {
 	if position < 0 {
 		return 0
 	}
-	if d := s.player.Duration; d > 0 && position > d {
+
+	// No track, no position. With nothing loaded there is no length to measure
+	// against, so whatever was left in the field went out unchecked — and after
+	// a transfer that carried no context, what was left in it was a timestamp.
+	// Read as a position that is fifty-six years, which is what the interface
+	// dutifully drew.
+	if s.player.Duration <= 0 {
+		return 0
+	}
+	if position > s.player.Duration {
 		return 0
 	}
 	return position

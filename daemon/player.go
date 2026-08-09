@@ -226,6 +226,14 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 			p.state.player.IsBuffering = false
 			p.state.player.IsPaused = false
 
+			// And nowhere in particular, because there is nothing to be
+			// anywhere in. What was in these was the last thing that played,
+			// or a timestamp.
+			p.state.player.Track = nil
+			p.state.player.Duration = 0
+			p.state.player.PositionAsOfTimestamp = 0
+			p.state.player.Timestamp = time.Now().UnixMilli()
+
 			p.app.server.Emit(&ApiEvent{Type: ApiEventTypeActive})
 			p.updateState(ctx)
 			return nil
