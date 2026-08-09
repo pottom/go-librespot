@@ -119,10 +119,11 @@ func NewHttpChunkedReader(log librespot.Logger, client *http.Client, audioUrl st
 	}()
 
 	// request the first chunk, needed for the complete content length
-	resp, err := r.downloadChunk(0)
+	resp, done, err := r.downloadChunk(0)
 	if err != nil {
 		return nil, fmt.Errorf("failed requesting first chunk: %w", err)
 	}
+	defer done()
 
 	defer func() { _ = resp.Body.Close() }()
 
@@ -164,18 +165,26 @@ func (r *HttpChunkedReader) isClosed() bool {
 	return r.ctx.Err() != nil
 }
 
-func (r *HttpChunkedReader) downloadChunk(idx int) (*http.Response, error) {
-	// Bounded, so that a url which has stopped answering stops being asked. See
-	// ChunkDeadline.
+// downloadChunk asks for one chunk and hands back the response with the call
+// that ends its deadline.
+//
+// The deadline has to outlive this function: what comes back is a body nobody
+// has read yet, and the request's context is what keeps it readable. Cancelled
+// on the way out of here, every stream failed at its first chunk with "context
+// canceled" — which is to say nothing played at all. The caller ends it once it
+// has the bytes.
+func (r *HttpChunkedReader) downloadChunk(idx int) (*http.Response, context.CancelFunc, error) {
+	// Bounded, so that a url which has stopped answering stops being asked, and
+	// bounded across the body as well: a chunk that arrives a byte at a time and
+	// then stops is the same dead url wearing a hat. See ChunkDeadline.
 	ctx, cancel := context.WithTimeout(r.ctx, ChunkDeadline)
-	defer cancel()
 
 	retryBackoff := backoff.WithContext(
 		backoff.WithMaxRetries(backoff.NewConstantBackOff(1*time.Second), 3),
 		ctx,
 	)
 
-	return backoff.RetryWithData(func() (*http.Response, error) {
+	resp, err := backoff.RetryWithData(func() (*http.Response, error) {
 		resp, err := r.client.Do((&http.Request{
 			Method: "GET",
 			URL:    r.url,
@@ -203,13 +212,19 @@ func (r *HttpChunkedReader) downloadChunk(idx int) (*http.Response, error) {
 
 		return resp, nil
 	}, retryBackoff)
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	return resp, cancel, nil
 }
 
 func (r *HttpChunkedReader) downloadAndRead(idx int) ([]byte, error) {
-	resp, err := r.downloadChunk(idx)
+	resp, done, err := r.downloadChunk(idx)
 	if err != nil {
 		return nil, fmt.Errorf("failed downloading chunk %d: %w", idx, r.closeErr(err))
 	}
+	defer done()
 
 	defer func() { _ = resp.Body.Close() }()
 
