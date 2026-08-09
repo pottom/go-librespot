@@ -492,10 +492,41 @@ func (s *StubApiServer) Close() error {
 	return nil
 }
 
+// apiPatience is how long a request waits for the player to take it, and then
+// for the player to answer it, before the caller is told the daemon is not
+// well.
+//
+// Every request is handed to the one loop that also runs the session, so
+// anything that blocks that loop blocks every request behind it — and the
+// handover had no way out at all. A daemon that has stopped answering while
+// still holding the port open is the worst of all the ways to be broken: it
+// looks alive from outside, every client waits on it forever, and nothing in
+// the log says so. Ten seconds is long enough for the slowest thing the loop
+// does between two of these and short enough that a caller finds out.
+var apiPatience = 10 * time.Second
+
 func (s *ConcreteApiServer) handleRequest(req ApiRequest, w http.ResponseWriter) {
 	req.resp = make(chan apiResponse, 1)
-	s.requests <- req
-	resp := <-req.resp
+
+	patience := time.NewTimer(apiPatience)
+	defer patience.Stop()
+
+	select {
+	case s.requests <- req:
+	case <-patience.C:
+		s.log.Warnf("the player did not take a %s request within %s", req.Type, apiPatience)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+
+	var resp apiResponse
+	select {
+	case resp = <-req.resp:
+	case <-patience.C:
+		s.log.Warnf("the player took a %s request and did not answer it within %s", req.Type, apiPatience)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
 
 	if resp.err != nil {
 		switch {

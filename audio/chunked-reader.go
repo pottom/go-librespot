@@ -21,7 +21,24 @@ import (
 const (
 	DefaultChunkSize = 512 * 1024
 	PrefetchCount    = 3
+
+	// ChunkDeadline is how long one chunk is given, retries and all, before the
+	// stream is given up on.
+	//
+	// Without it a chunk that can never arrive is asked for forever. The url a
+	// stream is read from belongs to a session and expires; when the network
+	// goes away for long enough that it does — a laptop asleep, a different
+	// network on the other side — every request against it fails, and every
+	// failure puts the next waiter in the fetcher's chair to fail the same way.
+	// Nothing downstream is told, so the decoder waits on a chunk that is not
+	// coming, the audio callback waits on the decoder, and the player loop
+	// waits on the callback. What was one dead url ends as a daemon that
+	// answers nothing.
 )
+
+// ChunkDeadline is how long one chunk is given, retries and all. A variable so
+// that a test does not have to wait it out.
+var ChunkDeadline = 45 * time.Second
 
 var contentRangeRegexp = regexp.MustCompile("^bytes (\\d+)-(\\d+)/(\\d+)$")
 
@@ -148,9 +165,14 @@ func (r *HttpChunkedReader) isClosed() bool {
 }
 
 func (r *HttpChunkedReader) downloadChunk(idx int) (*http.Response, error) {
+	// Bounded, so that a url which has stopped answering stops being asked. See
+	// ChunkDeadline.
+	ctx, cancel := context.WithTimeout(r.ctx, ChunkDeadline)
+	defer cancel()
+
 	retryBackoff := backoff.WithContext(
 		backoff.WithMaxRetries(backoff.NewConstantBackOff(1*time.Second), 3),
-		r.ctx,
+		ctx,
 	)
 
 	return backoff.RetryWithData(func() (*http.Response, error) {
@@ -164,7 +186,7 @@ func (r *HttpChunkedReader) downloadChunk(idx int) (*http.Response, error) {
 					min(max(r.len, DefaultChunkSize), int64((idx+1)*DefaultChunkSize))-1,
 				)},
 			},
-		}).WithContext(r.ctx))
+		}).WithContext(ctx))
 		if err != nil {
 			err = r.closeErr(err)
 			if errors.Is(err, net.ErrClosed) {
@@ -230,6 +252,16 @@ func (r *HttpChunkedReader) fetchChunk(idx int) ([]byte, error) {
 		chunk.fetching = false
 		chunk.Broadcast()
 		chunk.L.Unlock()
+
+		// A chunk that ran out of time is not a chunk that failed once: the url
+		// is not answering, and every waiter behind this one would sit down in
+		// the same chair and wait out the same deadline. So the whole stream is
+		// given up on, which wakes all of them at once with an error they can
+		// do something about — rather than one at a time, forever.
+		if errors.Is(err, context.DeadlineExceeded) && !r.isClosed() {
+			r.log.WithError(err).Warnf("giving up on the stream after chunk %d ran out of time", idx)
+			r.giveUp()
+		}
 		return nil, err
 	}
 
@@ -247,6 +279,22 @@ func (r *HttpChunkedReader) fetchChunk(idx int) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+// giveUp puts the reader out of service and wakes everybody waiting on it.
+//
+// Not Close: Close waits for the prefetchers to finish, and a prefetcher that
+// is waiting on this very chunk would be waiting for itself.
+func (r *HttpChunkedReader) giveUp() {
+	r.prefetchMu.Lock()
+	r.cancel()
+	r.prefetchMu.Unlock()
+
+	for _, chunk := range r.chunks {
+		chunk.L.Lock()
+		chunk.Broadcast()
+		chunk.L.Unlock()
+	}
 }
 
 func (r *HttpChunkedReader) prefetchChunks(curr int) {
@@ -267,6 +315,18 @@ func (r *HttpChunkedReader) startPrefetch(idx int) bool {
 
 	if r.isClosed() {
 		return false
+	}
+
+	// Nothing to start if it is already here or already on its way. Prefetching
+	// is asked for on every read, so without this a chunk that is slow to
+	// arrive collects a goroutine per read — dozens of them, all parked on the
+	// same condition, waiting for the one fetch that is actually running.
+	chunk := r.chunks[idx]
+	chunk.L.Lock()
+	busy := chunk.data != nil || chunk.fetching
+	chunk.L.Unlock()
+	if busy {
+		return true
 	}
 
 	r.prefetchWg.Add(1)

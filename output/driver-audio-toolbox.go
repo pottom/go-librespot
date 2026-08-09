@@ -57,7 +57,7 @@ func newAudioToolboxOutput(opts *NewOutputOptions) (*toolboxOutput, error) {
 	ctx := C.allocateAudioContext()
 	if ctx == nil {
 		allocErr := errors.New("failed to allocate AudioContext")
-		out.err <- allocErr
+		out.fail(allocErr)
 		return nil, allocErr
 	}
 	ctx.output = unsafe.Pointer(out)
@@ -117,12 +117,29 @@ func newAudioToolboxOutput(opts *NewOutputOptions) (*toolboxOutput, error) {
 	return out, nil
 }
 
+// fail hands an error to whoever is watching the output, and drops it if
+// nobody is.
+//
+// Never a plain send. Two of the places this is called from run on Core
+// Audio's own callback thread, and that thread may not be made to wait for
+// anything: the channel holds one error, so the second failure in a row
+// blocked it forever — and a blocked audio thread takes the decoder, the
+// player loop and every answer the daemon owed with it. The first error says
+// what went wrong; the ones behind it say it again.
+func (out *toolboxOutput) fail(err error) {
+	select {
+	case out.err <- err:
+	default:
+		log.WithError(err).Debugf("dropping an output error nobody is listening for")
+	}
+}
+
 // Error handler - returns new error obj
 func (out *toolboxOutput) toolboxError(name string, err C.int) error {
 	if errors.Is(unix.Errno(-err), unix.EPIPE) {
 		_ = out.Close()
 	}
-	out.err <- fmt.Errorf("%s: %d", name, err)
+	out.fail(fmt.Errorf("%s: %d", name, err))
 	return fmt.Errorf("%s: %d", name, err)
 }
 
@@ -131,7 +148,7 @@ func (out *toolboxOutput) bufferSamples(buffer C.AudioQueueBufferRef) {
 	data := make([]float32, out.bufferSize)
 	n, err := out.reader.Read(data)
 	if err != nil {
-		out.err <- fmt.Errorf("error reading samples: %v", err)
+		out.fail(fmt.Errorf("error reading samples: %v", err))
 		return
 	}
 
