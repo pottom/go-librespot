@@ -29,6 +29,13 @@ type Tempo struct {
 	env  []float32 // onset strength, oldest first
 	at   int       // write position in the ring
 
+	// The same again from the low end alone, which is the one thing that tells
+	// a beat from an off-beat. See phaseAt.
+	lp      float64 // the low pass's own state, sample to sample
+	lowAcc  float64
+	lowPrev float64
+	low     []float32
+
 	filled     int
 	sinceRun   int
 	sincePlace int
@@ -54,6 +61,12 @@ const (
 	// 44.1kHz, which is fine enough to place a beat and coarse enough that the
 	// envelope stays small.
 	tempoHop = 512
+
+	// tempoLowPass is how much of a sample a one-pole filter takes, which sets
+	// where the low end stops. At 44.1kHz this is a corner around a hundred and
+	// twenty hertz: a kick drum lives under it and a snare lives over it, which
+	// is the whole of what it is for. See phaseAt.
+	tempoLowPass = 0.017
 
 	// tempoHistory is how much of the envelope is kept. Twelve seconds holds
 	// enough beats for the autocorrelation to be sure of itself without letting
@@ -106,7 +119,7 @@ const (
 )
 
 func newTempo() *Tempo {
-	return &Tempo{env: make([]float32, tempoHistory)}
+	return &Tempo{env: make([]float32, tempoHistory), low: make([]float32, tempoHistory)}
 }
 
 // feed takes interleaved samples straight from the output path.
@@ -116,19 +129,31 @@ func (t *Tempo) feed(samples []float32, channels int) {
 
 	for _, v := range samples {
 		t.acc += float64(v) * float64(v)
+
+		// And the same energy again with everything but the low end taken off:
+		// one pole, which is all this needs, and a corner low enough to hold a
+		// kick and leave a snare out of it. See tempoLowPass.
+		t.lp += (float64(v) - t.lp) * tempoLowPass
+		t.lowAcc += t.lp * t.lp
+
 		t.count++
 		if t.count < tempoHop*channels {
 			continue
 		}
 
 		energy := math.Sqrt(t.acc / float64(t.count))
-		t.acc, t.count = 0, 0
+		low := math.Sqrt(t.lowAcc / float64(t.count))
+		t.acc, t.lowAcc, t.count = 0, 0, 0
 
 		// The rise, not the level: a loud passage is not a beat, a sudden
 		// increase is. In log terms, so a quiet passage counts as much as a
 		// loud one.
 		rise := math.Log1p(energy*40) - math.Log1p(t.prev*40)
 		t.prev = energy
+
+		lowRise := math.Log1p(low*40) - math.Log1p(t.lowPrev*40)
+		t.lowPrev = low
+		t.low[t.at] = float32(max(lowRise, 0))
 
 		t.env[t.at] = float32(max(rise, 0))
 		t.at = (t.at + 1) % len(t.env)
@@ -235,13 +260,17 @@ func (t *Tempo) estimate() {
 // tail is the newest of the envelope, oldest first, with the mean taken out —
 // the same shape estimate works on, over the window the beats are placed
 // against. Callers must hold t.mu.
-func (t *Tempo) tail() []float64 {
+func (t *Tempo) tail() []float64 { return t.tailOf(t.env) }
+
+// tailOf is the same for either envelope, oldest first and with its own mean
+// taken off.
+func (t *Tempo) tailOf(ring []float32) []float64 {
 	n := min(phaseWindow, t.filled)
 	out := make([]float64, n)
 
 	var mean float64
 	for i := range out {
-		out[i] = float64(t.env[(t.at-n+i+len(t.env)*2)%len(t.env)])
+		out[i] = float64(ring[(t.at-n+i+len(ring)*2)%len(ring)])
 		mean += out[i]
 	}
 	if n > 0 {
@@ -252,6 +281,37 @@ func (t *Tempo) tail() []float64 {
 	}
 	return out
 }
+
+// phaseFits is how much onset a comb at a given offset sits on, per tooth.
+//
+// Per tooth rather than in total, for the same reason the search itself counts
+// that way: an offset near the start fits one more tooth into the window than
+// one near the end, and on a total that extra tooth outweighs being right.
+func phaseFits(env []float64, off, lag float64) float64 {
+	var sum float64
+	var teeth int
+	for x := off; x < float64(len(env)); x += lag {
+		teeth++
+		for d := -1.0; d <= 1; d++ {
+			if i := int(x + d); i >= 0 && i < len(env) && env[i] > 0 {
+				sum += env[i]
+			}
+		}
+	}
+	if teeth == 0 {
+		return 0
+	}
+	return sum / float64(teeth)
+}
+
+// phaseKickEdge is how much better the low end has to look on the other side of
+// the bar before the comb is moved there.
+//
+// Well over one. Two combs half a period apart on a record whose kick and snare
+// are equally loud are a coin toss either way round, and flipping on a hair
+// would swap them back and forth from one placement to the next — which is
+// worse than being wrong consistently.
+const phaseKickEdge = 1.25
 
 // phaseAt finds where the beats fall, given how far apart they are.
 //
@@ -313,6 +373,29 @@ func (t *Tempo) phaseAt(env []float64, lag float64) {
 			if weight > 0 {
 				at += weighted / weight
 			}
+		}
+	}
+
+	// And now the one question the whole-band envelope cannot answer: whether
+	// this is the beat or the off-beat.
+	//
+	// A snare is as sharp an onset as a kick, so a comb sitting on the snares
+	// fits the music as well as one sitting on the kicks — the two are half a
+	// period apart and score within a whisker of each other, and which one wins
+	// is a coin toss. Measured through the interface at thirty frames a second,
+	// it landed on the wrong one of the two on Darude's "Sandstorm" (-0.36 of a
+	// beat out, which is +0.14 with half a period taken off) and on Laga's
+	// "RAISE THE BANNER" (+0.47) — two records of the three that were recorded.
+	//
+	// What tells them apart is the low end: a kick is under a hundred and
+	// twenty hertz and a snare is not. So the two candidates are weighed again
+	// on the low envelope alone, and the low end has to be clearly better
+	// before the comb is moved — a record with no kick in it has nothing to say
+	// here, and should be left where the whole band put it.
+	if low := t.tailOf(t.low); len(low) == len(env) {
+		other := math.Mod(at+lag/2, lag)
+		if here, there := phaseFits(low, at, lag), phaseFits(low, other, lag); there > here*phaseKickEdge {
+			at = other
 		}
 	}
 

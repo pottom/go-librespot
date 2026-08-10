@@ -77,3 +77,69 @@ func TestNoBeatIsPlacedWithoutOne(t *testing.T) {
 		t.Errorf("noise was given beats %s apart (%s ago), confidence %.2f", period, since, confidence)
 	}
 }
+
+// The comb lands on the kick, not on the snare.
+//
+// A snare is as sharp an onset as a kick, so a comb sitting on the snares fits
+// the music as well as one sitting on the kicks: the two are half a period
+// apart and score within a whisker of each other. Measured through the
+// interface at thirty frames a second, the wrong one of the two won on two of
+// the three records that were recorded. What tells them apart is the low end.
+func TestTheBeatLandsOnTheKick(t *testing.T) {
+	const rate = SampleRate
+	const bpm = 100.0
+	period := int(60.0 / bpm * rate)
+
+	// Twenty seconds of a bar and a half: a kick on the beat, a snare exactly
+	// between two, and the snare made the louder of the pair so that nothing but
+	// the low end can choose.
+	samples := make([]float32, 20*rate)
+	hit := func(at int, low bool, gain float32) {
+		for i := range 3000 {
+			if at+i >= len(samples) {
+				return
+			}
+			fade := gain * float32(1-float64(i)/3000)
+			f := 2400.0 // a snare, well over the corner
+			if low {
+				f = 60 // a kick, well under it
+			}
+			samples[at+i] += fade * float32(math.Sin(2*math.Pi*f*float64(i)/rate))
+		}
+	}
+	for beat := 0; ; beat++ {
+		at := beat * period
+		if at >= len(samples) {
+			break
+		}
+		hit(at, true, 0.6)
+		hit(at+period/2, false, 0.9)
+	}
+
+	tempo := newTempo()
+	tempo.feed(samples, 1)
+
+	got, since, _ := tempo.Beat()
+	if got == 0 {
+		t.Fatal("no beat was found in twenty seconds of a steady one")
+	}
+
+	// Where the last beat fell, against where the kicks actually are.
+	beats := float64(len(samples)) / float64(period)
+	last := (beats - math.Floor(beats)) * float64(period) / rate
+	want := time.Duration(last * float64(time.Second))
+	off := since - want
+	for off > got/2 {
+		off -= got
+	}
+	for off < -got/2 {
+		off += got
+	}
+
+	t.Logf("%.1f bpm found (%.1f played); the last beat is put %s from where the kick is, of a %s period",
+		60/got.Seconds(), bpm, off.Round(time.Millisecond), got.Round(time.Millisecond))
+
+	if d := off; d > got/4 || d < -got/4 {
+		t.Errorf("the beat is %s from the kick, which is most of the way to the snare between two", d)
+	}
+}
