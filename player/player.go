@@ -514,8 +514,17 @@ loop:
 
 			out = newOut
 			outErr = out.Error()
-			retries = 0
 			p.log.Infof("reopened the output device on %q", device)
+
+			// The tally is not cleared here, and that one line was a loop with
+			// no end in it. Opening is not working: when there is nothing left
+			// to play, the device opens perfectly and then fails on the first
+			// read, so every reopen cleared the count that was supposed to stop
+			// it. Measured in the daemon's log — "attempt 1 of 3", once a
+			// second, for as long as the daemon ran.
+			//
+			// The count is cleared where a device is put to work instead: a
+			// track being set opens one and starts it again from nothing.
 		case <-source.Done():
 			p.ev <- Event{Type: EventTypeNotPlaying}
 		}
