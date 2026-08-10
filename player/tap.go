@@ -240,3 +240,13 @@ func (p *Player) ResetTempo() {
 		t.spectrum.Reset()
 	}
 }
+
+// Watch is what the tempo analyser has before the gates Beat reports through.
+// See Tempo.Watch — it is there to be recorded, not to be drawn.
+func (p *Player) Watch() (bpm, confidence float64, agreed int, period float64) {
+	t := p.tap.Load()
+	if t == nil {
+		return 0, 0, 0, 0
+	}
+	return t.tempo.Watch()
+}

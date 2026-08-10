@@ -402,6 +402,15 @@ type ApiResponseSpectrum struct {
 	// what leaves anything drawn from the bands unable to tell a build from a
 	// lull. Nought when nothing has played yet.
 	Loud float64 `json:"loud_db"`
+
+	// What the analyser has before the gates Beat reports through: the tempo it
+	// last measured, how far its peak stood above the field, and how many
+	// consecutive estimates have agreed. Recorded rather than drawn — Beat says
+	// nothing for long stretches of some records, and these three say which of
+	// the two gates is the one shutting. See Tempo.Watch.
+	WatchBPM    float64 `json:"watch_bpm"`
+	WatchConf   float64 `json:"watch_conf"`
+	WatchAgreed int     `json:"watch_agreed"`
 }
 
 type ApiResponseWaveform struct {

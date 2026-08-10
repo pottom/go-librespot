@@ -44,6 +44,17 @@ type Tempo struct {
 	confidence float64
 	agreed     int
 
+	// settled says a tempo has been agreed and reported, and doubt how many
+	// estimates in a row have disagreed with it since. Together they are what
+	// stops one estimate landing on a harmonic from costing three seconds of no
+	// beat at all. See tempoDoubt.
+	settled bool
+	doubt   int
+
+	// other is the tempo the disagreeing estimates are agreeing on, so that a
+	// record which really has changed tempo is followed rather than dropped.
+	other float64
+
 	// hops is how many envelope values have gone by since the analyser started,
 	// and beat where the last beat fell on that count — a fractional position,
 	// because a beat does not land on a whole envelope value any more than a
@@ -116,6 +127,35 @@ const (
 	// 0.93 or better and noise scores 0.43. The floor sits between them with
 	// room on both sides.
 	tempoFloor = 0.6
+
+	// tempoKeep is the confidence a beat is kept at once it has been reported,
+	// which is not the confidence it takes to start reporting one.
+	//
+	// Measured over four records, 387 seconds recorded at thirty frames a
+	// second: a quarter of every record was a stretch where the analyser had a
+	// tempo and would not hand it over, and over those stretches the confidence
+	// sat at 0.54 to 0.67 — flickering across the 0.6 that starts it rather
+	// than falling away from it. A record does not stop having a beat because a
+	// bar of it went quiet, and a picture that stops keeping time for two
+	// seconds in the middle of a verse reads as the picture losing interest.
+	tempoKeep = 0.35
+
+	// tempoAgreeBPM is how far two estimates may be apart and still count as
+	// the same tempo.
+	tempoAgreeBPM = 3
+
+	// tempoDoubt is how many consecutive estimates have to disagree with a
+	// settled tempo before it is given up.
+	//
+	// A record does not change tempo every second and a half, which is how
+	// often the estimate runs. Measured over the same four records, one value
+	// dominates each of them — 136 on 94% of Sandstorm's estimates, 100 on 87%
+	// of RAISE THE BANNER's — and what the rest are is the occasional estimate
+	// landing on a harmonic: 178 for 136, 167 for 100. Every one of those cost
+	// three seconds of no beat, because it reset the agreement count to
+	// nothing. Three is about four and a half seconds, which is long enough to
+	// be a change of section and short enough to follow one.
+	tempoDoubt = 3
 )
 
 func newTempo() *Tempo {
@@ -245,16 +285,55 @@ func (t *Tempo) estimate() {
 		}
 	}
 
+	bpm := rate * 60 / lag
+
+	// A tempo that has settled is not given up for one estimate that disagrees
+	// with it. The estimate is thrown away entire — the period and the beats
+	// placed against it both stand — because a period taken from a harmonic
+	// puts the beats in the wrong places, which is worse than putting up none.
+	var switched bool
+	if t.settled && math.Abs(bpm-t.bpm) >= tempoAgreeBPM {
+		// The doubt is counted against the tempo the disagreeing estimates are
+		// themselves agreeing on, not merely against the settled one. Three
+		// estimates that each disagree with the record and with each other are
+		// noise; three that disagree with the record and agree with each other
+		// are a record that has changed tempo.
+		if t.other > 0 && math.Abs(bpm-t.other) < tempoAgreeBPM {
+			t.doubt++
+		} else {
+			t.other, t.doubt = bpm, 1
+		}
+		if t.doubt < tempoDoubt {
+			t.confidence = max(t.confidence, confidence)
+			return
+		}
+
+		// So the new tempo is taken and the time goes on being kept. Dropping
+		// to nothing here costs the seconds it takes to agree all over again,
+		// against the floor it takes to start rather than the one it takes to
+		// continue — measured, that is where the last of the long gaps was: a
+		// record whose confidence sits at 0.52 could hold a beat but could
+		// never win one back.
+		switched = true
+	}
+	t.doubt, t.other = 0, 0
+
 	t.period = lag
 	t.phaseAt(t.tail(), lag)
 
-	bpm := rate * 60 / lag
-	if t.bpm > 0 && math.Abs(bpm-t.bpm) < 3 {
+	if t.bpm > 0 && math.Abs(bpm-t.bpm) < tempoAgreeBPM {
 		t.agreed++
 	} else {
 		t.agreed = 0
 	}
 	t.bpm, t.confidence = bpm, confidence
+	if switched {
+		t.agreed = tempoAgree
+	}
+
+	if t.agreed >= tempoAgree && (t.confidence >= tempoFloor || switched) {
+		t.settled = true
+	}
 }
 
 // tail is the newest of the envelope, oldest first, with the mean taken out —
@@ -448,7 +527,15 @@ func (t *Tempo) Beat() (period, since time.Duration, confidence float64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if t.agreed < tempoAgree || t.confidence < tempoFloor || t.period <= 0 {
+	// Two floors, not one. What it takes to start keeping time is not what it
+	// takes to go on keeping it: the first has to be sure enough that a
+	// recording with no beat is never given an invented one, and the second only
+	// has to be sure the record has not stopped. See tempoKeep.
+	if t.period <= 0 || (!t.settled && (t.agreed < tempoAgree || t.confidence < tempoFloor)) {
+		return 0, 0, t.confidence
+	}
+	if t.settled && t.confidence < tempoKeep {
+		t.settled = false
 		return 0, 0, t.confidence
 	}
 
@@ -475,6 +562,23 @@ func (t *Tempo) Reset() {
 	t.acc, t.count, t.prev = 0, 0, 0
 	t.at, t.filled, t.sinceRun, t.sincePlace = 0, 0, 0, 0
 	t.bpm, t.confidence, t.agreed = 0, 0, 0
+	t.settled, t.doubt, t.other = false, 0, 0
 	t.hops, t.beat, t.period = 0, 0, 0
 	clear(t.env)
+}
+
+// Watch is what the analyser has, before the gates Beat reports through: the
+// tempo it last measured, how far the peak stood above the field, how many
+// consecutive estimates have agreed, and whether it is holding a period at all.
+//
+// It exists to answer one question with a recording rather than an argument.
+// Beat says nothing for long stretches of some records — two frames in three of
+// one of them — and there are two ways that can happen: the analyser has lost
+// the tempo, or it still has one and is refusing to hand it over. The gates are
+// agreed and confidence, and each of them costs a different fix, so which one
+// fires is worth a field on the wire.
+func (t *Tempo) Watch() (bpm, confidence float64, agreed int, period float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.bpm, t.confidence, t.agreed, t.period
 }
