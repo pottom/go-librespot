@@ -630,7 +630,7 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 		}
 		return p.lyricsFor(ctx, id.Base62())
 	case ApiRequestTypeSpectrum:
-		out := &ApiResponseSpectrum{Bands: p.player.Spectrum()}
+		out := &ApiResponseSpectrum{Bands: p.player.Spectrum(), Loud: float64(p.player.Loudness())}
 		if period, since, _ := p.player.Beat(); period > 0 {
 			out.Beat = float64(period) / float64(time.Millisecond)
 			out.Since = float64(since) / float64(time.Millisecond)

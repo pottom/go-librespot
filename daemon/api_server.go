@@ -394,6 +394,14 @@ type ApiResponseSpectrum struct {
 	// audio device, so the beat it has just found may not have been heard yet.
 	Beat  float64 `json:"beat_ms"`
 	Since float64 `json:"beat_since_ms"`
+
+	// Loud is where the top of the spectrum's own scale sits, in decibels: -55
+	// in silence, up towards nought as the record gets louder. The bands cannot
+	// say it, because every one of them is measured against it — a band reads
+	// the same in a hush as in a chorus, which is what makes a meter usable and
+	// what leaves anything drawn from the bands unable to tell a build from a
+	// lull. Nought when nothing has played yet.
+	Loud float64 `json:"loud_db"`
 }
 
 type ApiResponseWaveform struct {

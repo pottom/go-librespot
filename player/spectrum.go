@@ -315,6 +315,29 @@ func (s *Spectrum) Bands() []float32 {
 	return out
 }
 
+// Loudness is where the top of the spectrum's scale sits, in decibels, or
+// nought when nothing has been heard yet.
+//
+// It is the one number the bands cannot carry. Everything they say is measured
+// against this: a band reads 0.8 in a hush and 0.8 in a chorus, because the
+// scale moves with the music so that a quiet passage is still a picture rather
+// than a flat line. That is right for a meter and it leaves anything drawn from
+// the bands unable to tell a build from a lull — the very thing a picture wants
+// to grow with. Handed out, it can be put back.
+//
+// Decibels, and the same ones the bands are made in: -55 when there is nothing,
+// up towards nought as the record gets louder, falling 0.6 dB a hop when it does
+// not, so it climbs with a build at once and comes down over seconds.
+func (s *Spectrum) Loudness() float32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.fill == 0 {
+		return 0
+	}
+	return s.envelope
+}
+
 // Reset forgets what has been heard, for when the track changes.
 func (s *Spectrum) Reset() {
 	s.mu.Lock()

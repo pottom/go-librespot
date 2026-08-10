@@ -220,6 +220,17 @@ func (p *Player) Spectrum() []float32 {
 	return t.spectrum.Bands()
 }
 
+// Loudness is where the top of the spectrum's own scale sits, in decibels, so
+// that a caller can tell a build from a lull — which the bands cannot say,
+// because they are measured against it. Nought when nothing has played yet.
+func (p *Player) Loudness() float32 {
+	t := p.tap.Load()
+	if t == nil {
+		return 0
+	}
+	return t.spectrum.Loudness()
+}
+
 // ResetTempo forgets what has been heard, for when the track changes. Without
 // it the previous track's beat lingers for as long as the analysis window is
 // deep.
