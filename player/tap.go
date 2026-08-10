@@ -35,6 +35,7 @@ type tap struct {
 	// decimated few the waveform keeps, so it is fed separately.
 	tempo    *Tempo
 	spectrum *Spectrum
+	chroma   *Chroma
 	channels int
 
 	mu    sync.Mutex
@@ -66,6 +67,7 @@ func newTap(inner librespot.Float32Reader, rate, channels, fps int) *tap {
 		inner:    inner,
 		tempo:    newTempo(),
 		spectrum: newSpectrum(rate),
+		chroma:   newChroma(rate),
 		channels: channels,
 		frame:    make([]float32, TapSamples),
 		every:    every,
@@ -101,6 +103,7 @@ func (t *tap) Read(p []float32) (int, error) {
 		t.absorb(p[:n])
 		t.tempo.feed(p[:n], t.channels)
 		t.spectrum.feed(p[:n], t.channels)
+		t.chroma.feed(p[:n], t.channels)
 	}
 	return n, err
 }
@@ -249,4 +252,14 @@ func (p *Player) Watch() (bpm, confidence float64, agreed int, period float64) {
 		return 0, 0, 0, 0
 	}
 	return t.tempo.Watch()
+}
+
+// Notes is which of the twelve pitch classes are sounding, C first, each 0..1.
+// Nil until enough has been heard. See Chroma.
+func (p *Player) Notes() []float32 {
+	t := p.tap.Load()
+	if t == nil {
+		return nil
+	}
+	return t.chroma.Notes()
 }

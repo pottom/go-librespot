@@ -635,6 +635,7 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 			out.Beat = float64(period) / float64(time.Millisecond)
 			out.Since = float64(since) / float64(time.Millisecond)
 		}
+		out.Notes = p.player.Notes()
 		out.WatchBPM, out.WatchConf, out.WatchAgreed, _ = p.player.Watch()
 		return out, nil
 	case ApiRequestTypeWaveform:

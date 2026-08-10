@@ -282,6 +282,11 @@ func (app *App) newAppPlayer(ctx context.Context, creds any) (_ *AppPlayer, err 
 		return nil, fmt.Errorf("failed initializing player: %w", err)
 	}
 
+	// The analyser answers for itself from here. What the picture asks for
+	// thirty times a second does not need the goroutine that also runs
+	// playback, and waiting behind it was where the frames went. See ApiLive.
+	app.server.SetLive(appPlayer.player)
+
 	return appPlayer, nil
 }
 

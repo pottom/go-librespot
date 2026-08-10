@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -27,6 +28,34 @@ type ApiServer interface {
 	Emit(ev *ApiEvent)
 	Receive() <-chan ApiRequest
 	Close() error
+
+	// SetLive hands over the analyser, so the questions that do not need the
+	// player's state machine are not asked through it. See ApiLive.
+	SetLive(l ApiLive)
+}
+
+// ApiLive is what can be answered without the player.
+//
+// Every request goes down one channel to the goroutine that also runs playback,
+// so an answer waits behind whatever that goroutine is doing — loading a track,
+// fetching an audio key, talking to Spotify. For a request made once and drawn
+// once that is nothing. For the spectrum it is the whole problem: the interface
+// asks for one thirty times a second and draws the answer, so a request that
+// waits is a frame that does not arrive.
+//
+// Measured from the interface: of the frames that went over their 33ms, the
+// update took 2ms and the render took 2ms and the daemon took 120. The picture
+// stopping for a fifth of a second was this queue, every time.
+//
+// None of these touch the state machine. They read the analyser, which has a
+// lock of its own and is written by the audio path — so they are answered
+// straight, off the loop.
+type ApiLive interface {
+	Spectrum() []float32
+	Waveform() []float32
+	Loudness() float32
+	Notes() []float32
+	Beat() (period, since time.Duration, confidence float64)
 }
 
 type ConcreteApiServer struct {
@@ -43,6 +72,18 @@ type ConcreteApiServer struct {
 
 	clients     []*websocket.Conn
 	clientsLock sync.RWMutex
+
+	// live answers the cheap reads without the loop. See ApiLive.
+	live atomic.Pointer[ApiLive]
+}
+
+func (s *ConcreteApiServer) SetLive(l ApiLive) { s.live.Store(&l) }
+
+func (s *ConcreteApiServer) liveOne() ApiLive {
+	if p := s.live.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 var (
@@ -408,6 +449,11 @@ type ApiResponseSpectrum struct {
 	// consecutive estimates have agreed. Recorded rather than drawn — Beat says
 	// nothing for long stretches of some records, and these three say which of
 	// the two gates is the one shutting. See Tempo.Watch.
+	// Notes is which of the twelve pitch classes are sounding, C first, each
+	// 0..1 — what the bands cannot say, because two neighbouring semitones are
+	// one band until well above where a tune lives. See Chroma.
+	Notes []float32 `json:"notes"`
+
 	WatchBPM    float64 `json:"watch_bpm"`
 	WatchConf   float64 `json:"watch_conf"`
 	WatchAgreed int     `json:"watch_agreed"`
@@ -518,6 +564,9 @@ func (s *StubApiServer) Emit(ev *ApiEvent) {
 func (s *StubApiServer) Receive() <-chan ApiRequest {
 	return make(<-chan ApiRequest)
 }
+
+// SetLive is nothing here: a stub server answers nobody. See ApiLive.
+func (s *StubApiServer) SetLive(ApiLive) {}
 
 func (s *StubApiServer) Close() error {
 	return nil
@@ -826,6 +875,17 @@ func (s *ConcreteApiServer) serve() {
 		s.handleRequest(ApiRequest{Type: ApiRequestTypeLyrics, Data: r.URL.Query().Get("uri")}, w)
 	})
 	m.HandleFunc("/player/spectrum", func(w http.ResponseWriter, r *http.Request) {
+		// Straight from the analyser, off the loop. See ApiLive.
+		if l := s.liveOne(); l != nil {
+			out := &ApiResponseSpectrum{Bands: l.Spectrum(), Loud: float64(l.Loudness()), Notes: l.Notes()}
+			if period, since, _ := l.Beat(); period > 0 {
+				out.Beat = float64(period) / float64(time.Millisecond)
+				out.Since = float64(since) / float64(time.Millisecond)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(out)
+			return
+		}
 		if r.Method != "GET" {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
@@ -834,6 +894,11 @@ func (s *ConcreteApiServer) serve() {
 		s.handleRequest(ApiRequest{Type: ApiRequestTypeSpectrum}, w)
 	})
 	m.HandleFunc("/player/waveform", func(w http.ResponseWriter, r *http.Request) {
+		if l := s.liveOne(); l != nil {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(&ApiResponseWaveform{Samples: l.Waveform()})
+			return
+		}
 		if r.Method != "GET" {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
