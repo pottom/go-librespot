@@ -180,35 +180,34 @@ func (p *Player) Tempo() float64 {
 }
 
 // Beat is how far apart the beats of what is playing are, and how long ago the
-// last one was heard, or nothing while the analyser is still listening.
+// last one was, or nothing while the analyser is still listening.
 //
-// Heard, not analysed. What the analyser is given is on its way to the audio
-// device and has not come out of it yet — three buffers deep, plus whatever the
-// device itself holds — so the beat it has just found is still in the future
-// for anybody listening. Reported without that taken off, every picture drawn
-// to it would run ahead of the music by the depth of the buffer, which at 174
-// bpm is a fifth of a beat.
+// In the same time as the spectrum, which is the whole point. What was tried
+// first was to report it in the time it will be *heard*: the audio the analyser
+// is given has not come out of the device yet — three buffers deep — so a beat
+// just found is still ahead of the listener by about seventy milliseconds, and
+// taking that off makes the beat land with the sound.
 //
-// The offset may be negative, meaning the last beat found has not been heard
-// yet. Callers that want the next one take the period into account themselves.
+// It is the wrong answer, and it was measured to be. The spectrum handed out
+// beside it carries no such correction, so what a picture drawn from both got
+// was a meter jumping at one moment and a beat marked seventy milliseconds
+// later — and an eye compares one part of a picture with another far more
+// sharply than it compares a picture with a sound. Measured over three records
+// played through the interface at thirty frames a second, the rises in the
+// spectrum sat at 0.88 of a beat rather than on it, and correcting for the
+// buffer put them exactly on it: the whole error was this, and the analyser
+// itself was on the money.
+//
+// So the picture agrees with itself and leads the sound by the depth of the
+// buffer. The other way to have both would be to hold the spectrum back by the
+// same amount and match the ear as well — worth doing the day this picture is
+// being judged against a room rather than against itself.
 func (p *Player) Beat() (period, since time.Duration, confidence float64) {
 	t := p.tap.Load()
 	if t == nil {
 		return 0, 0, 0
 	}
-
-	period, since, confidence = t.tempo.Beat()
-	if period == 0 {
-		return 0, 0, confidence
-	}
-	return period, since - p.outputDelay(), confidence
-}
-
-// outputDelay is how long what has just been written takes to be heard: the
-// buffers waiting their turn, in samples.
-func (p *Player) outputDelay() time.Duration {
-	return time.Duration(outputBuffers) * time.Duration(outputBufferFrames) *
-		time.Second / time.Duration(SampleRate)
+	return t.tempo.Beat()
 }
 
 // Spectrum is how the energy of what is playing is spread across the frequency
