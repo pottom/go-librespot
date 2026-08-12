@@ -75,6 +75,83 @@ type ConcreteApiServer struct {
 
 	// live answers the cheap reads without the loop. See ApiLive.
 	live atomic.Pointer[ApiLive]
+
+	// held is the last answer each read gave, as the bytes it was sent as, so a
+	// loop that has stopped moving answers with what was true rather than with
+	// nothing. See apiHeldFor.
+	held     map[ApiRequestType][]byte
+	heldLock sync.RWMutex
+}
+
+// apiHeldReads are the requests that may be answered from what they last
+// answered.
+//
+// Reads, and only the ones the interface asks for over and over. A command must
+// never come from here — "pause" answered out of a cupboard would report that
+// the music had stopped while it played on — and neither must anything that
+// takes an argument, because the last answer was to a different question.
+var apiHeldReads = map[ApiRequestType]bool{
+	ApiRequestTypeStatus:    true,
+	ApiRequestTypeQueue:     true,
+	ApiRequestTypeGetVolume: true,
+}
+
+// apiHeldPatience is how long a read waits for the loop before the last answer
+// is used instead.
+//
+// A second. A healthy loop answers one of these in well under a millisecond —
+// the same loop answers a frame request in 0.2ms at the median at sixty a
+// second — so a second is a hundredfold margin over anything that is merely
+// busy, and it is the difference between an interface that keeps drawing and
+// one that stops for ten seconds at a time. See apiPatience, which is what a
+// command still waits.
+var apiHeldPatience = time.Second
+
+// apiHeldFor is the last answer a read gave, and whether there is one.
+func (s *ConcreteApiServer) apiHeldFor(t ApiRequestType) ([]byte, bool) {
+	if !apiHeldReads[t] {
+		return nil, false
+	}
+	s.heldLock.RLock()
+	defer s.heldLock.RUnlock()
+	body, ok := s.held[t]
+	return body, ok
+}
+
+// apiHold keeps what a read answered, as the bytes it was sent as.
+//
+// The bytes rather than the value, for two reasons. The loop owns everything a
+// reply is built from and goes on changing it, so keeping the value would be
+// keeping a window onto state another goroutine is writing. And a held answer is
+// wanted at the moment the machine is in trouble, which is not the moment to be
+// encoding anything.
+func (s *ConcreteApiServer) apiHold(t ApiRequestType, data any) {
+	if !apiHeldReads[t] {
+		return
+	}
+	body, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	// The newline an encoder puts on, so a held answer is byte for byte the
+	// answer that was given rather than one that differs by whitespace.
+	body = append(body, '\n')
+	s.heldLock.Lock()
+	defer s.heldLock.Unlock()
+	if s.held == nil {
+		s.held = make(map[ApiRequestType][]byte, len(apiHeldReads))
+	}
+	s.held[t] = body
+}
+
+// apiSayHeld answers with what the read last said, and says that it is old.
+func (s *ConcreteApiServer) apiSayHeld(t ApiRequestType, body []byte, w http.ResponseWriter) {
+	s.log.Warnf("the player did not answer a %s within %s; saying what it last said", t, apiHeldPatience)
+	w.Header().Set("Content-Type", "application/json")
+	// The standard way of saying a body is not fresh, so anything that cares can
+	// tell without the shape of the answer changing for everything that does not.
+	w.Header().Set("Warning", `110 - "Response is Stale"`)
+	_, _ = w.Write(body)
 }
 
 func (s *ConcreteApiServer) SetLive(l ApiLive) { s.live.Store(&l) }
@@ -591,8 +668,23 @@ func (s *ConcreteApiServer) handleRequest(req ApiRequest, w http.ResponseWriter)
 	patience := time.NewTimer(apiPatience)
 	defer patience.Stop()
 
+	// A read that has been answered before gives up on the loop early and says
+	// what it last said. The whole budget runs from here rather than being
+	// restarted after the request is taken: a loop that takes a request and sits
+	// on it has cost the caller exactly as much as one that never took it.
+	var stale <-chan time.Time
+	held, hasHeld := s.apiHeldFor(req.Type)
+	if hasHeld {
+		t := time.NewTimer(apiHeldPatience)
+		defer t.Stop()
+		stale = t.C
+	}
+
 	select {
 	case s.requests <- req:
+	case <-stale:
+		s.apiSayHeld(req.Type, held, w)
+		return
 	case <-patience.C:
 		s.log.Warnf("the player did not take a %s request within %s", req.Type, apiPatience)
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -602,6 +694,9 @@ func (s *ConcreteApiServer) handleRequest(req ApiRequest, w http.ResponseWriter)
 	var resp apiResponse
 	select {
 	case resp = <-req.resp:
+	case <-stale:
+		s.apiSayHeld(req.Type, held, w)
+		return
 	case <-patience.C:
 		s.log.Warnf("the player took a %s request and did not answer it within %s", req.Type, apiPatience)
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -640,6 +735,7 @@ func (s *ConcreteApiServer) handleRequest(req ApiRequest, w http.ResponseWriter)
 		w.Header().Set("Content-Type", "application/octet-stream")
 		_, _ = w.Write(respData)
 	default:
+		s.apiHold(req.Type, respData)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(respData)
 	}
