@@ -54,7 +54,6 @@ type ApiLive interface {
 	Spectrum() []float32
 	Waveform() []float32
 	Loudness() float32
-	Notes() []float32
 	Beat() (period, since time.Duration, confidence float64)
 }
 
@@ -526,11 +525,6 @@ type ApiResponseSpectrum struct {
 	// consecutive estimates have agreed. Recorded rather than drawn — Beat says
 	// nothing for long stretches of some records, and these three say which of
 	// the two gates is the one shutting. See Tempo.Watch.
-	// Notes is which of the twelve pitch classes are sounding, C first, each
-	// 0..1 — what the bands cannot say, because two neighbouring semitones are
-	// one band until well above where a tune lives. See Chroma.
-	Notes []float32 `json:"notes"`
-
 	WatchBPM    float64 `json:"watch_bpm"`
 	WatchConf   float64 `json:"watch_conf"`
 	WatchAgreed int     `json:"watch_agreed"`
@@ -973,7 +967,7 @@ func (s *ConcreteApiServer) serve() {
 	m.HandleFunc("/player/spectrum", func(w http.ResponseWriter, r *http.Request) {
 		// Straight from the analyser, off the loop. See ApiLive.
 		if l := s.liveOne(); l != nil {
-			out := &ApiResponseSpectrum{Bands: l.Spectrum(), Loud: float64(l.Loudness()), Notes: l.Notes()}
+			out := &ApiResponseSpectrum{Bands: l.Spectrum(), Loud: float64(l.Loudness())}
 			if period, since, _ := l.Beat(); period > 0 {
 				out.Beat = float64(period) / float64(time.Millisecond)
 				out.Since = float64(since) / float64(time.Millisecond)
