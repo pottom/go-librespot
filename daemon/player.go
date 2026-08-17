@@ -75,6 +75,13 @@ type AppPlayer struct {
 
 	prefetchTimer *time.Timer
 
+	// deaf names what this device can no longer hear from. Its inputs close for
+	// good once reconnection has been given up on, and from then the device
+	// plays and answers its API while being out of reach of Spotify Connect —
+	// which from outside looks exactly like a device that is working. Said in
+	// the status so that whatever is controlling it can say so. See Run.
+	deaf []string
+
 	// consecutiveUnplayableSkips bounds how many unplayable tracks in a row advanceNext will
 	// skip past (Spotify-refused audio keys / restricted media) before giving up — so a run
 	// of refused tracks (even at the very start of a context) advances to the first playable
@@ -555,6 +562,7 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 			Buffering:      p.state.player.IsBuffering,
 			PlayOrigin:     p.state.player.PlayOrigin.FeatureIdentifier,
 			Unplayable:     p.unplayable,
+			Deaf:           p.deaf,
 		}
 
 		if p.primaryStream != nil && p.prodInfo != nil {
@@ -943,6 +951,7 @@ func (p *AppPlayer) Run(ctx context.Context, apiRecv <-chan ApiRequest, mprisRec
 				// reconnecting. A nil channel blocks instead, so the loop goes on
 				// answering everything that is still alive.
 				p.app.log.Warnf("the accesspoint has closed; nothing more will come from it until this device is restarted")
+				p.deaf = append(p.deaf, "the accesspoint")
 				apRecv = nil
 				continue
 			}
@@ -958,6 +967,7 @@ func (p *AppPlayer) Run(ctx context.Context, apiRecv <-chan ApiRequest, mprisRec
 				// reconnecting. A nil channel blocks instead, so the loop goes on
 				// answering everything that is still alive.
 				p.app.log.Warnf("the dealer's messages has closed; nothing more will come from it until this device is restarted")
+				p.deaf = append(p.deaf, "the dealer's messages")
 				msgRecv = nil
 				continue
 			}
@@ -973,6 +983,7 @@ func (p *AppPlayer) Run(ctx context.Context, apiRecv <-chan ApiRequest, mprisRec
 				// reconnecting. A nil channel blocks instead, so the loop goes on
 				// answering everything that is still alive.
 				p.app.log.Warnf("the dealer's requests has closed; nothing more will come from it until this device is restarted")
+				p.deaf = append(p.deaf, "the dealer's requests")
 				reqRecv = nil
 				continue
 			}
@@ -1015,6 +1026,7 @@ func (p *AppPlayer) Run(ctx context.Context, apiRecv <-chan ApiRequest, mprisRec
 				// reconnecting. A nil channel blocks instead, so the loop goes on
 				// answering everything that is still alive.
 				p.app.log.Warnf("the player has closed; nothing more will come from it until this device is restarted")
+				p.deaf = append(p.deaf, "the player")
 				playerRecv = nil
 				continue
 			}

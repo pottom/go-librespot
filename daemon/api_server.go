@@ -428,6 +428,14 @@ type ApiResponseStatus struct {
 	// reads as a fault in the controller.
 	Unplayable string `json:"unplayable"`
 
+	// Deaf names what this device can no longer hear from, where anything has
+	// gone: the accesspoint, the dealer's messages, its requests, the player.
+	// They close for good when reconnection has been given up on, and after
+	// that the device plays and answers this API but is out of reach of
+	// Spotify Connect until it is started again — which looks, from outside,
+	// exactly like a device that is working. See AppPlayer.Run.
+	Deaf []string `json:"deaf,omitempty"`
+
 	// Bitrate and Format describe the stream actually being played, which is
 	// not necessarily the one configured: the best available format is picked
 	// per track, and a track may not offer the preferred one.
