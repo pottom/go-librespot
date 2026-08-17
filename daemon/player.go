@@ -937,6 +937,13 @@ func (p *AppPlayer) Run(ctx context.Context, apiRecv <-chan ApiRequest, mprisRec
 			return
 		case pkt, ok := <-apRecv:
 			if !ok {
+				// Closed for good, and a closed channel is ready for ever: leaving
+				// this case selectable spins the loop as fast as the machine will
+				// go. Measured at a whole core for hours after a dealer gave up
+				// reconnecting. A nil channel blocks instead, so the loop goes on
+				// answering everything that is still alive.
+				p.app.log.Warnf("the accesspoint has closed; nothing more will come from it until this device is restarted")
+				apRecv = nil
 				continue
 			}
 
@@ -945,6 +952,13 @@ func (p *AppPlayer) Run(ctx context.Context, apiRecv <-chan ApiRequest, mprisRec
 			}
 		case msg, ok := <-msgRecv:
 			if !ok {
+				// Closed for good, and a closed channel is ready for ever: leaving
+				// this case selectable spins the loop as fast as the machine will
+				// go. Measured at a whole core for hours after a dealer gave up
+				// reconnecting. A nil channel blocks instead, so the loop goes on
+				// answering everything that is still alive.
+				p.app.log.Warnf("the dealer's messages has closed; nothing more will come from it until this device is restarted")
+				msgRecv = nil
 				continue
 			}
 
@@ -953,6 +967,13 @@ func (p *AppPlayer) Run(ctx context.Context, apiRecv <-chan ApiRequest, mprisRec
 			}
 		case req, ok := <-reqRecv:
 			if !ok {
+				// Closed for good, and a closed channel is ready for ever: leaving
+				// this case selectable spins the loop as fast as the machine will
+				// go. Measured at a whole core for hours after a dealer gave up
+				// reconnecting. A nil channel blocks instead, so the loop goes on
+				// answering everything that is still alive.
+				p.app.log.Warnf("the dealer's requests has closed; nothing more will come from it until this device is restarted")
+				reqRecv = nil
 				continue
 			}
 
@@ -988,6 +1009,13 @@ func (p *AppPlayer) Run(ctx context.Context, apiRecv <-chan ApiRequest, mprisRec
 			mprisReq.Reply(dbusError)
 		case ev, ok := <-playerRecv:
 			if !ok {
+				// Closed for good, and a closed channel is ready for ever: leaving
+				// this case selectable spins the loop as fast as the machine will
+				// go. Measured at a whole core for hours after a dealer gave up
+				// reconnecting. A nil channel blocks instead, so the loop goes on
+				// answering everything that is still alive.
+				p.app.log.Warnf("the player has closed; nothing more will come from it until this device is restarted")
+				playerRecv = nil
 				continue
 			}
 
