@@ -6,11 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	librespot "github.com/devgianlu/go-librespot"
+	"github.com/devgianlu/go-librespot/ap"
 	"github.com/devgianlu/go-librespot/apresolve"
 	"github.com/devgianlu/go-librespot/cache"
 	"github.com/devgianlu/go-librespot/mpris"
@@ -47,6 +51,12 @@ type App struct {
 	// tempos remembers the beat rate of tracks already played, so a controller
 	// can show one for a track further down the queue.
 	tempos *tempoStore
+
+	// signingInSince is when the device started trying to sign in, in unix
+	// nanoseconds, or nought when it is not waiting on that. Read from outside
+	// the loop — a watchdog wants to say why a device has not come up — so it
+	// is atomic rather than guarded.
+	signingInSince atomic.Int64
 
 	closed bool
 }
@@ -290,6 +300,131 @@ func (app *App) newAppPlayer(ctx context.Context, creds any) (_ *AppPlayer, err 
 	return appPlayer, nil
 }
 
+// signInCeiling is the longest this waits between two attempts at signing in.
+// A variable so that a test can watch a morning of no network go by in a
+// moment.
+var signInCeiling = time.Minute
+
+// keepSigningIn signs the device in, and goes on trying for as long as the only
+// thing wrong is that Spotify cannot be reached.
+//
+// Without this a daemon started before the network is up simply ends: measured,
+// it takes the port, fails at the resolver, and the process is gone. What
+// starts another is the interface, if there is one running, half a minute
+// later — so a device started at login on a machine that wakes with its wifi
+// still coming up is not there, and nothing says why.
+//
+// Narrow on purpose. Only a network error is tried again; a refused login is
+// not, because waiting cannot produce a password, and neither is anything
+// unrecognised, which fails exactly as it did before. A first sign-in needs no
+// help from here: it does not fail, it waits, on a browser somebody has to
+// visit — see the interactive credentials, and spindle's watchdog, which says
+// so out loud.
+func (app *App) keepSigningIn(ctx context.Context, signIn func(context.Context) (*AppPlayer, error)) (*AppPlayer, error) {
+	appPlayer, err := signIn(ctx)
+	if err == nil || !worthAnotherTry(err) {
+		return appPlayer, err
+	}
+
+	app.log.WithError(err).Warnf("cannot reach Spotify to sign in; trying again until it can be reached")
+
+	// Something has to answer the local API while there is no player to answer
+	// it. Every request goes down the channel the player reads, and with nobody
+	// reading it each one waits out the server's whole patience before it is
+	// told anything at all — ten seconds, for a question asked every second.
+	// The zeroconf side has said ErrNoSession in this state all along.
+	stop := make(chan struct{})
+	stopped := make(chan struct{})
+	go app.sayNoSession(stop, stopped)
+	defer func() { close(stop); <-stopped }()
+
+	wait := backoff.NewExponentialBackOff()
+	wait.MaxInterval = signInCeiling
+	wait.MaxElapsedTime = 0 // never give up
+
+	since := time.Now()
+	app.signingInSince.Store(since.UnixNano())
+	defer app.signingInSince.Store(0)
+
+	for {
+		select {
+		case <-time.After(wait.NextBackOff()):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+
+		appPlayer, err := signIn(ctx)
+		if err == nil {
+			app.log.Infof("signed in after %s of trying", time.Since(since).Round(time.Second))
+			return appPlayer, nil
+		}
+		if !worthAnotherTry(err) {
+			return nil, err
+		}
+		app.log.WithError(err).Debugf("failed signing in")
+	}
+}
+
+// worthAnotherTry reports that a failed sign-in failed for a reason that may
+// not be true a minute from now.
+//
+// Only the network counts. A login the accesspoint refused is the one thing
+// certain not to mend itself, and everything else is left alone deliberately:
+// an error nobody here recognises behaves exactly as it did before this
+// existed, rather than becoming a loop that never ends and says nothing.
+func worthAnotherTry(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+
+	var refused *ap.AccesspointLoginError
+	if errors.As(err, &refused) {
+		return false
+	}
+
+	var unreachable net.Error
+	return errors.As(err, &unreachable)
+}
+
+// sayNoSession answers the local API while there is no player to answer it, so
+// that a request made in this state is told so at once instead of waiting out
+// the server's patience. It is the same answer the zeroconf side gives.
+func (app *App) sayNoSession(stop <-chan struct{}, stopped chan<- struct{}) {
+	defer close(stopped)
+
+	for {
+		select {
+		case <-stop:
+			return
+		case req := <-app.server.Receive():
+			switch req.Type {
+			case ApiRequestTypeRoot:
+				req.Reply(&ApiResponseRoot{}, nil)
+			case ApiRequestSetDeviceName:
+				// The device name is not the session's to know, and answering
+				// it here keeps a rename made while the network is down.
+				app.SetDeviceName(req.Data.(string))
+				req.Reply(nil, nil)
+			default:
+				req.Reply(nil, ErrNoSession)
+			}
+		}
+	}
+}
+
+// SigningIn says how long the device has been trying to sign in, and whether it
+// is still trying. Zero and false once it is in — or when it never had to wait.
+func (app *App) SigningIn() (time.Duration, bool) {
+	at := app.signingInSince.Load()
+	if at == 0 {
+		return 0, false
+	}
+	if since := time.Since(time.Unix(0, at)); since > 0 {
+		return since, true
+	}
+	return 0, true
+}
+
 func (app *App) runZeroconf(ctx context.Context) error {
 	return app.withAppPlayer(ctx, func(ctx context.Context) (*AppPlayer, error) {
 		if app.cfg.Credentials.Zeroconf.PersistCredentials && len(app.state.Credentials.Data) > 0 {
@@ -342,7 +477,7 @@ func (app *App) withCredentials(ctx context.Context, creds any) (err error) {
 
 func (app *App) withAppPlayer(ctx context.Context, appPlayerFunc func(context.Context) (*AppPlayer, error)) (err error) {
 	if !app.cfg.ZeroconfEnabled {
-		appPlayer, err := appPlayerFunc(ctx)
+		appPlayer, err := app.keepSigningIn(ctx, appPlayerFunc)
 		if err != nil {
 			return err
 		} else if appPlayer == nil {

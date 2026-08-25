@@ -42,7 +42,7 @@ type Session struct {
 	events   player.EventManager
 }
 
-func NewSessionFromOptions(ctx context.Context, opts *Options) (*Session, error) {
+func NewSessionFromOptions(ctx context.Context, opts *Options) (_ *Session, err error) {
 	// validate device type
 	if opts.DeviceType == devicespb.DeviceType_UNKNOWN {
 		return nil, fmt.Errorf("missing device type")
@@ -60,6 +60,18 @@ func NewSessionFromOptions(ctx context.Context, opts *Options) (*Session, error)
 		deviceId:   opts.DeviceId,
 		client:     opts.Client,
 	}
+
+	// Every step after the accesspoint can fail, and until now a failure at any
+	// of them walked away from an accesspoint that was connected and
+	// authenticated, with goroutines of its own reconnecting for ever. One
+	// abandoned session is a leak nobody notices in a process that is about to
+	// exit; a caller that tries again is a pile of them, each holding a
+	// connection to Spotify in this device's name.
+	defer func() {
+		if err != nil {
+			s.letGo()
+		}
+	}()
 
 	if s.client == nil {
 		s.client = &http.Client{Timeout: 30 * time.Second}
@@ -213,4 +225,19 @@ func (s *Session) Close() {
 	s.events.Close()
 	s.dealer.Close()
 	s.ap.Close()
+}
+
+// letGo closes whatever a half-built session had got as far as making. Close
+// cannot be used for it: that one is for a session that was finished, and says
+// so by assuming every part of one is there.
+func (s *Session) letGo() {
+	if s.events != nil {
+		s.events.Close()
+	}
+	if s.dealer != nil {
+		s.dealer.Close()
+	}
+	if s.ap != nil {
+		s.ap.Close()
+	}
 }
