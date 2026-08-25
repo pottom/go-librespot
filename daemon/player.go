@@ -563,6 +563,7 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 			PlayOrigin:     p.state.player.PlayOrigin.FeatureIdentifier,
 			Unplayable:     p.unplayable,
 			Deaf:           p.deaf,
+			OutOfTouch:     p.outOfTouch(),
 		}
 
 		if p.primaryStream != nil && p.prodInfo != nil {
@@ -815,6 +816,36 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 	default:
 		return nil, fmt.Errorf("unknown request type: %s", req.Type)
 	}
+}
+
+// outOfTouch names what has lost its connection and is trying to get it back,
+// against how long it has been trying, in seconds.
+//
+// It is asked for rather than remembered because it is the truth at the moment
+// of asking: nothing tells this loop that a connection came back, and a field
+// updated by an event would go stale the moment one did. Nil while everything
+// is connected, which is what keeps it out of the answer.
+func (p *AppPlayer) outOfTouch() map[string]float64 {
+	var out map[string]float64
+	add := func(what string, since time.Duration, lost bool) {
+		if !lost {
+			return
+		}
+		if out == nil {
+			out = map[string]float64{}
+		}
+		out[what] = since.Seconds()
+	}
+
+	if a := p.sess.Accesspoint(); a != nil {
+		since, lost := a.OutOfTouch()
+		add("accesspoint", since, lost)
+	}
+	if d := p.sess.Dealer(); d != nil {
+		since, lost := d.OutOfTouch()
+		add("dealer", since, lost)
+	}
+	return out
 }
 
 func (p *AppPlayer) setDeviceName(ctx context.Context, name string) {

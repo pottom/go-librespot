@@ -436,6 +436,17 @@ type ApiResponseStatus struct {
 	// exactly like a device that is working. See AppPlayer.Run.
 	Deaf []string `json:"deaf,omitempty"`
 
+	// OutOfTouch names what this device has lost its connection to and is
+	// trying to get back — "accesspoint", "dealer" — against how many seconds
+	// it has been trying. It is the state between working and deaf, and the
+	// device is in it every time a network goes: playback carries on from what
+	// is already buffered, and nothing else about the status looks wrong.
+	//
+	// Absent while everything is connected. Nothing here ever gives up on its
+	// own, so a controller can say how long it has been going rather than
+	// having to guess whether it still is.
+	OutOfTouch map[string]float64 `json:"out_of_touch,omitempty"`
+
 	// Bitrate and Format describe the stream actually being played, which is
 	// not necessarily the one configured: the best available format is picked
 	// per track, and a track may not offer the preferred one.
