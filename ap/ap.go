@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -61,6 +62,10 @@ type Accesspoint struct {
 	recvChansLock   sync.RWMutex
 	lastPongAck     time.Time
 	lastPongAckLock sync.Mutex
+
+	// lostAt is when the connection went, in unix nanoseconds, or nought while
+	// it is up. See the dealer's field of the same name.
+	lostAt atomic.Int64
 
 	// connMu protects conn, encConn, and welcome pointer state.
 	connMu  sync.RWMutex
@@ -368,19 +373,15 @@ loop:
 	select {
 	case <-ap.done:
 	default:
-		ap.connMu.Lock()
-		if err := backoff.Retry(ap.reconnect, backoff.WithContext(backoff.NewExponentialBackOff(), ap.ctx)); err != nil {
-			ap.log.WithError(err).Errorf("failed reconnecting accesspoint")
-			ap.connMu.Unlock()
-
-			// something went very wrong, give up
-			ap.Close()
-		} else {
-			ap.connMu.Unlock()
-
+		if ap.keepReconnecting() {
 			// reconnection was successful, do not close receivers
 			return
 		}
+
+		// Either the accesspoint is closing or it has nothing left to log in
+		// with. Both end the same way: the receivers below are closed, and
+		// whoever is reading them is told the device has gone deaf.
+		ap.Close()
 	}
 
 	ap.recvChansLock.RLock()
@@ -398,6 +399,84 @@ loop:
 	}
 }
 
+// reconnectCeiling is the longest this waits between two attempts at getting
+// the connection back. See the dealer's constant of the same name.
+// A variable rather than a constant so that a test can watch an outage that
+// lasts a night happen in a moment.
+var reconnectCeiling = time.Minute
+
+// keepReconnecting tries to log back in to the accesspoint until it succeeds,
+// the accesspoint is closed, or it turns out there is nothing to log in with.
+// It reports whether it succeeded.
+//
+// A bounded retry was here before: fifteen minutes and then the receive
+// channels closed, which is the device going deaf for good — playing on, still
+// answering its own API, and out of everybody's reach until the process is
+// restarted. A laptop shut for the night comes back to a working network and
+// deserves a working device.
+func (ap *Accesspoint) keepReconnecting() bool {
+	wait := backoff.NewExponentialBackOff()
+	wait.MaxInterval = reconnectCeiling
+	wait.MaxElapsedTime = 0 // never give up
+
+	ap.lostAt.Store(time.Now().UnixNano())
+	defer ap.lostAt.Store(0)
+
+	told := false
+	for {
+		// Per attempt rather than across the whole loop: connMu is what every
+		// send waits on, and the audio key request the player makes to start a
+		// track is one of them. Held for an hour, the daemon is frozen for an
+		// hour rather than failing a track and saying so.
+		ap.connMu.Lock()
+		err := ap.reconnect()
+		ap.connMu.Unlock()
+
+		if err == nil {
+			if since, _ := ap.OutOfTouch(); told {
+				ap.log.Infof("the accesspoint is back after %s", since.Round(time.Second))
+			}
+			return true
+		}
+
+		// Nothing to log in with. Trying again cannot help and would go on for
+		// ever, so this is the one failure that ends the trying.
+		var permanent *backoff.PermanentError
+		if errors.As(err, &permanent) {
+			ap.log.WithError(err).Errorf("cannot reconnect the accesspoint")
+			return false
+		}
+
+		if !told {
+			ap.log.WithError(err).Warnf("lost the accesspoint connection; trying again until it comes back")
+			told = true
+		} else {
+			ap.log.WithError(err).Debugf("failed reconnecting accesspoint")
+		}
+
+		select {
+		case <-time.After(wait.NextBackOff()):
+		case <-ap.ctx.Done():
+			return false
+		}
+	}
+}
+
+// OutOfTouch says how long the accesspoint has been without a connection, and
+// whether it is without one at all. Zero and false while it is connected.
+func (ap *Accesspoint) OutOfTouch() (time.Duration, bool) {
+	at := ap.lostAt.Load()
+	if at == 0 {
+		return 0, false
+	}
+
+	// Never negative, whatever the clock has been told since.
+	if since := time.Since(time.Unix(0, at)); since > 0 {
+		return since, true
+	}
+	return 0, true
+}
+
 func (ap *Accesspoint) pongAckTicker() {
 	ticker := time.NewTicker(pongAckInterval)
 
@@ -407,6 +486,13 @@ loop:
 		case <-ap.done:
 			break loop
 		case <-ticker.C:
+			// Nothing to conclude from the silence while there is no
+			// connection: the deadline being read belongs to a socket that has
+			// already gone, and closing on it lands on the next one.
+			if _, lost := ap.OutOfTouch(); lost {
+				continue
+			}
+
 			timePassed := ap.timeSinceLastPongAck()
 			if timePassed > pongAckInterval {
 				ap.log.Errorf("did not receive last pong ack from accesspoint, %.0fs passed", timePassed.Seconds())
